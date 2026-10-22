@@ -1,0 +1,10 @@
+.DS_Store
+/.build/
+/.swiftpm/
+/Packages/
+/Package.resolved
+xcuserdata/
+DerivedData/
+*.xcresult
+# Contact sheets written by the snapshot tests
+/Example/Artifacts/

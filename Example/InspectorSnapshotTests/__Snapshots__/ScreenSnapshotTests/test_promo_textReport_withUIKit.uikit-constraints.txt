@@ -1,0 +1,24 @@
+                          PromoBannerView @ 20,200.67 362×96
+                            UIImageView @ 36,229 40×38.67
+                              ⊢ icon.width = 40
+                              ⊢ icon.height = 40
+                              ⊢ icon.leading = PromoBannerView.leading + 16
+                              ⊢ icon.centerY = PromoBannerView.centerY
+                              ⊢ title.leading = icon.trailing + 12
+                            UILabel [Headline 17pt Semibold] @ 88,218.67 176.67×24.33
+                              ⊢ title.leading = icon.trailing + 12
+                              ⊢ title.top = PromoBannerView.top + 18
+                              ⊢ title.trailing ≤ button.leading − 8
+                              ⊢ subtitle.leading = title.leading
+                              ⊢ subtitle.top = title.bottom + 4
+                            UILabel [Subheadline 15pt Regular] @ 88,247 206×44
+                              ⊢ subtitle.leading = title.leading
+                              ⊢ subtitle.top = title.bottom + 4
+                              ⊢ subtitle.trailing = button.leading − 8
+                            UIButton [Body 17pt Regular] @ 302,228.67 64×40.33
+                              ⊢ button.width ≥ 64
+                              ⊢ title.trailing ≤ button.leading − 8
+                              ⊢ subtitle.trailing = button.leading − 8
+                              ⊢ button.trailing = PromoBannerView.trailing − 16
+                              ⊢ button.centerY = PromoBannerView.centerY
+                              _UISystemBackgroundView @ 302,228.67 64×40.33

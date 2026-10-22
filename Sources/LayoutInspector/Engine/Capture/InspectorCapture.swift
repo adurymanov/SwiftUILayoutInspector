@@ -1,0 +1,270 @@
+#if LayoutInspectorEngine && os(iOS)
+import UIKit
+
+/// One capture of a view hierarchy: a SwiftUI tree per hosting view and the UIKit render tree.
+///
+/// Get one with ``LayoutInspector/capture(_:)`` or ``LayoutInspector/captureWhenStable(_:timeout:quietPeriod:until:)``.
+/// Node frames are in the coordinate space of the captured view; after the view scrolls or moves call
+/// ``resolveFrames(in:)`` again.
+public final class InspectorCapture {
+    /// One root (``NodeKind/host``) per SwiftUI hosting view: the screen, navigation destinations, list cells…
+    public let swiftUIRoots: [InspectorNode]
+    public let uikitRoot: InspectorNode
+    /// `false` when SwiftUI does not record its debug graph (see ``LayoutInspector/bootstrap(isEnabled:)``):
+    /// only the render tree is available then.
+    public let isSwiftUIGraphAvailable: Bool
+    /// How long the capture took.
+    public let duration: TimeInterval
+    public let date = Date()
+    private(set) var issues: [LintIssue] = []
+
+    init(swiftUIRoots: [InspectorNode], uikitRoot: InspectorNode, isSwiftUIGraphAvailable: Bool, duration: TimeInterval) {
+        self.swiftUIRoots = swiftUIRoots
+        self.uikitRoot = uikitRoot
+        self.isSwiftUIGraphAvailable = isSwiftUIGraphAvailable
+        self.duration = duration
+    }
+
+    /// Every SwiftUI node, depth first.
+    public var swiftUINodes: [InspectorNode] {
+        var all: [InspectorNode] = []
+        swiftUIRoots.forEach { $0.forEach { all.append($0) } }
+        return all
+    }
+
+    /// Every UIKit view and render layer, depth first.
+    public var uikitNodes: [InspectorNode] {
+        var all: [InspectorNode] = []
+        uikitRoot.forEach { all.append($0) }
+        return all
+    }
+
+    /// Re-resolves every anchor into `space` (cheap – call on scroll / every frame).
+    public func resolveFrames(in space: UIView) {
+        func resolve(_ n: InspectorNode) {
+            n.frame = n.anchor.resolve(in: space) ?? .null
+            n.children.forEach(resolve)
+        }
+        swiftUIRoots.forEach(resolve)
+        resolve(uikitRoot)
+    }
+
+    func runLint(rules: LayoutInspector.LintRules, bounds: CGRect) {
+        issues = LayoutLint.run(on: self, rules: rules, bounds: bounds)
+    }
+
+    /// A visible `ProgressView` – the content is probably still loading.
+    public var containsLoadingIndicator: Bool {
+        swiftUINodes.contains { $0.kind == .control && $0.title == "ProgressView" && $0.isVisible }
+    }
+
+    public func node(withID id: Int) -> InspectorNode? {
+        for root in swiftUIRoots { if let n = root.first(where: { $0.id == id }) { return n } }
+        return uikitRoot.first { $0.id == id }
+    }
+
+    /// The first SwiftUI node whose title or text equals `query`, or whose detail contains it.
+    ///
+    /// ```swift
+    /// capture.find("ProfileHeader", kind: .component)
+    /// capture.find("Anna Petrova", kind: .text)?.font?.size
+    /// ```
+    public func find(_ query: String, kind: NodeKind? = nil) -> InspectorNode? {
+        for root in swiftUIRoots {
+            if let hit = root.find(query, kind: kind) { return hit }
+        }
+        return nil
+    }
+
+    /// SwiftUI nodes of `kind` (all of them when `nil`), depth first.
+    public func nodes(_ kind: NodeKind? = nil) -> [InspectorNode] {
+        swiftUINodes.filter { kind == nil || $0.kind == kind }
+    }
+
+    /// Checks the captured layout against design rules – what ``LayoutInspector/Mode/lint`` shows.
+    /// - Parameter bounds: only nodes intersecting this rect (in the space of the last ``resolveFrames(in:)``).
+    public func lintIssues(rules: LayoutInspector.LintRules = LayoutInspector.LintRules(), in bounds: CGRect = .infinite) -> [LintIssue] {
+        LayoutLint.run(on: self, rules: rules, bounds: bounds)
+    }
+
+    /// Text "layout snapshot" (see ``LayoutReport``).
+    public func report(_ options: LayoutReport.Options = LayoutReport.Options()) -> String {
+        LayoutReport.text(for: self, options: options)
+    }
+}
+
+enum LayoutCapture {
+    /// Use AttributeGraph tree elements to restore app-defined components (see `ComponentReconstruction`).
+    static var reconstructComponents = true
+    static var lastReconstructionLog: [String] { ComponentReconstruction.log }
+
+    /// Captures everything visible inside `root` (a window or any view). `excluding` – inspector's own views.
+    static func capture(_ root: UIView, excluding: [UIView] = []) -> InspectorCapture {
+        let start = CACurrentMediaTime()
+        let nextID: () -> Int = { idCounter += 1; return idCounter }
+        var timings: [String: Double] = [:]
+        func measure<T>(_ key: String, _ body: () -> T) -> T {
+            let t = CACurrentMediaTime()
+            defer { timings[key, default: 0] += CACurrentMediaTime() - t }
+            return body()
+        }
+
+        ComponentReconstruction.log = []
+        let allHosts = visibleHostingViews(in: root, excluding: excluding)
+        // Hosts fully covered by a nested host (the app root around a NavigationStack) draw nothing themselves:
+        // skip their (huge) `_ViewDebug` data, but keep their AttributeGraph tree – app screens are declared there.
+        let hosts = skipCoveredHosts ? allHosts.filter { !isCovered($0, by: allHosts) } : allHosts
+
+        // Per-host cache: a host whose render tree did not change keeps its previous trees.
+        // (The first capture of new content is expensive – Swift runtime warms up metadata for every new
+        // SwiftUI type in the debug values – subsequent captures of the same content take a few ms.)
+        var fresh: [UIView] = []
+        var signatures: [ObjectIdentifier: Int] = [:]
+        for host in hosts {
+            let signature = layoutSignature(of: host)
+            signatures[ObjectIdentifier(host)] = signature
+            if useCache, let cached = cache[ObjectIdentifier(host)], cached.signature == signature, cached.host === host { continue }
+            fresh.append(host)
+        }
+
+        // App-defined views are missing from `_ViewDebug` data – recover them from AttributeGraph.
+        var agTrees: [AttributeGraphTree.Element] = []
+        var freshAG: [ObjectIdentifier: AttributeGraphTree.Element] = [:]
+        if reconstructComponents {
+            for host in allHosts {
+                let id = ObjectIdentifier(host)
+                let signature = signatures[id] ?? layoutSignature(of: host)
+                if let cached = agCache[id], cached.signature == signature, cached.host === host, useCache {
+                    agTrees.append(cached.tree)
+                    continue
+                }
+                if !fresh.contains(where: { $0 === host }), let tree = cache[id]?.attributeGraph {
+                    agTrees.append(tree)
+                } else if let tree = measure("attributeGraph[\(TypeNames.shortClassName(host))]", { AttributeGraphTree.tree(of: host) }) {
+                    agTrees.append(tree)
+                    freshAG[id] = tree
+                    agCache[id] = AGCacheEntry(host: host, signature: signature, tree: tree)
+                }
+            }
+        }
+        let reconstruction = measure("reconstructIndex") { ComponentReconstruction(trees: agTrees) }
+
+        var roots: [InspectorNode] = []
+        var graphAvailable = false
+        var newCache: [ObjectIdentifier: CacheEntry] = [:]
+        for host in hosts {
+            let id = ObjectIdentifier(host)
+            if !fresh.contains(where: { $0 === host }), let cached = cache[id] {
+                newCache[id] = cached
+                graphAvailable = true
+                if let tree = cached.tree { roots.append(tree) }
+                continue
+            }
+            let hostKey = "viewDebugData[\(TypeNames.shortClassName(host))]"
+            guard let json = measure(hostKey, { SwiftUIGraphReader.debugJSON(of: host) }) else { continue }
+            let rawRoots = measure("rawTree") { json.map(RawDebugNode.init(json:)) }
+            rawRoots.forEach(SwiftUIGraphReader.pruneHidden)
+            measure("reconstructApply") { reconstruction.apply(to: rawRoots) }
+            if !rawRoots.isEmpty { graphAvailable = true }
+            let tree = measure("semanticTree") { SwiftUITreeBuilder(host: host, nextID: nextID).build(roots: rawRoots) }
+            let kept = tree.children.isEmpty ? nil : tree
+            if let kept { roots.append(kept) }
+            newCache[id] = CacheEntry(host: host, signature: signatures[id] ?? 0, tree: kept, attributeGraph: freshAG[id])
+        }
+        cache = newCache
+
+        let uikit = measure("uikit") { UIKitCapture.capture(root: root, excluding: excluding, nextID: nextID) }
+        let capture = InspectorCapture(swiftUIRoots: roots, uikitRoot: uikit, isSwiftUIGraphAvailable: graphAvailable,
+                                       duration: CACurrentMediaTime() - start)
+        lastTimings = ["total \(Int((CACurrentMediaTime() - start) * 1000)) ms"]
+            + timings.sorted { $0.value > $1.value }.map { "\($0.key) \(Int($0.value * 1000)) ms" }
+            + ["hosts \(hosts.count), re-captured \(fresh.count)"]
+        return capture
+    }
+
+    private struct CacheEntry {
+        weak var host: UIView?
+        var signature: Int
+        var tree: InspectorNode?
+        var attributeGraph: AttributeGraphTree.Element?
+    }
+
+    private struct AGCacheEntry {
+        weak var host: UIView?
+        var signature: Int
+        var tree: AttributeGraphTree.Element
+    }
+
+    private static var cache: [ObjectIdentifier: CacheEntry] = [:]
+    private static var agCache: [ObjectIdentifier: AGCacheEntry] = [:]
+    private static var idCounter = 0
+
+    /// Reuse trees of hosting views whose render tree did not change since the previous capture.
+    static var useCache = true
+
+    static func resetCache() { cache = [:]; agCache = [:] }
+
+    /// Where the time of the last capture went (diagnostics).
+    private(set) static var lastTimings: [String] = []
+
+    /// Skip hosting views whose whole area is covered by a nested hosting view (e.g. the app root host that only
+    /// contains a `NavigationStack`): their debug graph is huge (everything ever pushed) and draws nothing visible.
+    static var skipCoveredHosts = true
+
+    static func visibleHostingViews(in root: UIView, excluding: [UIView]) -> [UIView] {
+        var result: [UIView] = []
+        func walk(_ v: UIView) {
+            if excluding.contains(where: { $0 === v }) || v.isHidden || v.alpha < 0.01 { return }
+            if SwiftUIGraphReader.isHostingView(v) { result.append(v) }
+            v.subviews.forEach(walk)
+        }
+        walk(root)
+        return result
+    }
+
+    static func isCovered(_ host: UIView, by hosts: [UIView]) -> Bool {
+        let frame = host.convert(host.bounds, to: nil)
+        return hosts.contains { other in
+            other !== host && other.isDescendant(of: host)
+                && other.convert(other.bounds, to: nil).insetBy(dx: -1, dy: -1).contains(frame)
+        }
+    }
+
+    /// Cheap fingerprint of the render tree: changes when something is added/moved/resized,
+    /// but not when a scroll view scrolls (bounds.origin is ignored). Used to auto-refresh on dynamic data.
+    static func layoutSignature(of root: UIView, excluding: [UIView] = []) -> Int {
+        var hasher = Hasher()
+        var count = 0
+        func walk(_ layer: CALayer, depth: Int) {
+            guard depth < 64 else { return }
+            count += 1
+            hasher.combine(ObjectIdentifier(layer))
+            if !(layer.delegate is UIScrollView) {
+                hasher.combine(layer.position.x); hasher.combine(layer.position.y)
+            }
+            hasher.combine(layer.bounds.size.width); hasher.combine(layer.bounds.size.height)
+            hasher.combine(layer.isHidden)
+            if let contents = layer.contents { hasher.combine(ObjectIdentifier(contents as AnyObject)) }
+            for sub in layer.sublayers ?? [] {
+                if let v = sub.delegate as? UIView, excluding.contains(where: { $0 === v }) { continue }
+                walk(sub, depth: depth + 1)
+            }
+        }
+        walk(root.layer, depth: 0)
+        hasher.combine(count)
+        return hasher.finalize()
+    }
+
+    /// Fingerprint of scroll positions – when it changes the overlay only needs to be re-resolved, not re-captured.
+    static func scrollSignature(of root: UIView) -> Int {
+        var hasher = Hasher()
+        func walk(_ v: UIView) {
+            if let s = v as? UIScrollView { hasher.combine(s.contentOffset.x); hasher.combine(s.contentOffset.y) }
+            v.subviews.forEach(walk)
+        }
+        walk(root)
+        return hasher.finalize()
+    }
+}
+
+#endif
