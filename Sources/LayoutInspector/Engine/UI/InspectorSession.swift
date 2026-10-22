@@ -73,7 +73,6 @@ final class InspectorSession: ObservableObject {
     private var frameCounter = 0
     private var layoutSignature = 0
     private var scrollSignature = 0
-    private var anchorSize: CGSize?
     private var isMoving = false
     private var dirtySince: CFTimeInterval?
     private var lastCaptureTime: CFTimeInterval = 0
@@ -127,7 +126,6 @@ final class InspectorSession: ObservableObject {
         selectedID = nil
         measureTargetID = nil
         layoutSignature = 0
-        anchorSize = nil
         dirtySince = CACurrentMediaTime()
         lastCaptureTime = CACurrentMediaTime()
     }
@@ -312,8 +310,9 @@ final class InspectorSession: ObservableObject {
         }
     }
 
-    /// Keeps the overlay on the inspected view while it moves (sheet presentation, navigation push,
-    /// interactive dismissal): the drawing is translated and only redrawn when the view changes size.
+    /// Keeps the overlay on the inspected view while it moves (sheet presentation, navigation transitions,
+    /// detent changes). UIKit moves the view to its final place at once and animates only its presentation
+    /// layer: the overlay is drawn at the final place and translated to where the view is on screen.
     private func trackAnchor(_ anchor: UIView, in space: UIView) {
         guard let appWindow = anchor.window else { return }
         let model = anchor.convert(anchor.bounds, to: space)
@@ -321,13 +320,10 @@ final class InspectorSession: ObservableObject {
         let windowLayer = appWindow.layer.presentation() ?? appWindow.layer
         let presented = appWindow.convert(presentationLayer.convert(presentationLayer.bounds, to: windowLayer), to: space)
 
-        if anchorSize != model.size || overlay.scope == nil {
-            anchorSize = model.size
+        if overlay.scope != model {
+            let resized = overlay.scope?.size != model.size
             overlay.scope = model
-            syncOptions()
-        } else if overlay.scope?.origin != model.origin {
-            // Moved without resizing (e.g. the sheet is being dragged): the drawing is still valid.
-            overlay.scope = model
+            if resized { syncOptions() }
         }
         let drawn = overlay.drawnScopeOrigin ?? model.origin
         let transform = CGAffineTransform(translationX: presented.minX - drawn.x, y: presented.minY - drawn.y)

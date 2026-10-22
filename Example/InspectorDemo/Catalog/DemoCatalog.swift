@@ -24,19 +24,19 @@ struct DemoCatalog: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
-                Section("Screens") {
-                    ForEach(DemoScreen.allCases) { screen in
-                        Button { open(screen) } label: { row(screen) }
-                            .tint(.primary)
-                    }
-                }
                 Section {
                     LayoutInspectorSettings($inspector)
                     Picker("Open as", selection: $presentation) {
                         ForEach(Presentation.allCases) { Text($0.title).tag($0) }
                     }
                 } header: {
-                    Text("Layout inspector")
+                    Text("Debug")
+                }
+                Section("Screens") {
+                    ForEach(DemoScreen.allCases) { screen in
+                        Button { open(screen) } label: { row(screen) }
+                            .tint(.primary)
+                    }
                 }
                 Section {
                     Button("Inspect this window") { LayoutInspector.show(windowConfiguration) }

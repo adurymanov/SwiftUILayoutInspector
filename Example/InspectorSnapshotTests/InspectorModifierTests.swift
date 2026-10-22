@@ -143,6 +143,31 @@ final class InspectorModifierTests: XCTestCase {
         try await waitUntil { LayoutInspector.activeConfiguration?.mode == .components && LayoutInspector.activeWindow != nil }
     }
 
+    /// The drawn overlay moves with the screen during a push and is kept for when the screen comes back.
+    func test_overlayFollowsNavigationTransition() async throws {
+        let model = Model()
+        let harness = ScreenHarness(PushingScreen(model: model))
+        defer { harness.tearDown() }
+        try await waitUntil { LayoutInspector.activeCapture?.find("Probe", kind: .text) != nil }
+        let overlay = try XCTUnwrap(LayoutInspector.activeWindow?.rootViewController?.view.subviews.first)
+        XCTAssertEqual(overlay.transform, .identity)
+
+        model.isPresenting = true
+        // UIKit puts the screen at its final place at once and animates the presentation layer:
+        // the overlay compensates with a translation that fades out as the animation ends.
+        var largestShift: CGFloat = 0
+        while LayoutInspector.activeWindow != nil {
+            largestShift = max(largestShift, abs(overlay.transform.tx))
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertGreaterThan(largestShift, 20, "the overlay did not move with the screen")
+
+        model.isPresenting = false
+        try await waitUntil { LayoutInspector.activeWindow != nil }
+        XCTAssertNotNil(LayoutInspector.activeCapture?.find("Probe", kind: .text), "capture was dropped")
+        try await waitUntil { overlay.transform == .identity }
+    }
+
     func test_windowInspector() async throws {
         let harness = ScreenHarness(Text("Probe"))
         defer { harness.tearDown() }
@@ -193,6 +218,17 @@ private struct Probe: View {
 
     var body: some View {
         Text("Probe").padding(24).onAppear { model.stateTokens.append(token) }
+    }
+}
+
+private struct PushingScreen: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        Text("Probe")
+            .padding(80)
+            .layoutInspector(.components)
+            .navigationDestination(isPresented: $model.isPresenting) { Text("Pushed") }
     }
 }
 

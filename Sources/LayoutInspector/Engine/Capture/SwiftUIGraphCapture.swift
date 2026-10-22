@@ -491,6 +491,8 @@ final class SwiftUITreeBuilder {
         if base == "_VariadicView.Tree", let first = raw.genericArguments.first, first.hasPrefix("_LayoutRoot<") {
             let layoutName = TypeNames.base(of: String(first.dropFirst("_LayoutRoot<".count).dropLast()))
             if Self.stacks[layoutName] != nil { return .passThrough }
+            // SwiftUI's own layouts (navigation bar items and the like) are not the app's.
+            if raw.typeName.contains("_LayoutRoot<SwiftUI.") || raw.typeName.contains("_LayoutRoot<SwiftUICore.") { return .passThrough }
             var info = NodeInfo()
             let spacing = value?.first(named: "spacing", maxDepth: 4)?.number
             info.stack = StackInfo(axis: .grid, name: layoutName, alignment: nil, spacing: spacing)
