@@ -236,6 +236,44 @@ Captures are cached per hosting view and repeated when the render tree changes a
 capture of new content in a fresh process takes about a second (up to a few seconds for a large `Form`)
 while the Swift runtime warms up; later captures take milliseconds. Everything runs on the main thread.
 
+## Performance
+
+Measured with `Example/InspectorBenchmark` on an iPad Pro 11" (M2, iOS 27.0), Release build: 6 runs with and
+6 runs without `SWIFTUI_VIEW_DEBUG` in alternating order, medians.
+
+**`bootstrap()` with the inspector closed** — what recording the debug graph costs the app's own SwiftUI work:
+
+| | without | with |
+|---|---|---|
+| first mount, 100-row list | 148.6 ms | 149.1 ms |
+| mount again, 100-row list | 98.6 ms | 99.3 ms |
+| first mount, 48-row `Form` | 132.9 ms | 133.5 ms |
+| mount again, `Form` | 87.4 ms | 88.0 ms |
+| update all 100 rows | 29.5 ms | 29.6 ms |
+| update one row | 2.1 ms | 2.1 ms |
+| 150 scroll steps through a 2000-row `LazyVStack` | 439 ms | 442 ms |
+| memory after all of the above | 45.1 MB | 45.6 MB |
+
+The difference stays within 1%, mostly within the run-to-run spread.
+
+**The inspector open** — one capture: the first one in the process takes 1.2 s (the Swift runtime warms up),
+the first capture of the next new screen 0.42 s, repeated captures 15–16 ms.
+
+These are main-thread times for building, layout and committing layers; the render server and the GPU are not
+included. The content is synthetic, and other devices were not measured. The per-frame cost of an open inspector
+(following scrolling and content changes) is not measured either.
+
+To repeat: run the `InspectorBenchmark` scheme once from Xcode to install it (it uses the Release configuration;
+pick your team to run it on a device), then
+
+```bash
+cd Example/InspectorBenchmark
+./run.sh <simulator-or-device-udid> 6 results.jsonl   # devices must be unlocked
+python3 report.py results.jsonl
+```
+
+Raw results are in `Example/InspectorBenchmark/Results/`.
+
 ## Private API
 
 The inspector relies on SwiftUI and AttributeGraph internals: the `makeViewDebugData` selector,

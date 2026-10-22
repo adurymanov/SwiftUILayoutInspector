@@ -31,6 +31,27 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Inspector Demo
         PRODUCT_BUNDLE_IDENTIFIER: dev.layoutinspector.example
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+  InspectorBenchmark:
+    type: application
+    platform: iOS
+    sources:
+      - path: InspectorBenchmark
+        excludes: ["Results/**", "*.sh", "*.py"]
+    dependencies:
+      - package: LayoutInspector
+        product: LayoutInspector
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_CFBundleDisplayName: Inspector Benchmark
+        PRODUCT_BUNDLE_IDENTIFIER: dev.layoutinspector.benchmark
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        TARGETED_DEVICE_FAMILY: "1,2"
+        # Runs on devices: pick your team in Xcode or pass DEVELOPMENT_TEAM=… to xcodebuild.
+        CODE_SIGNING_ALLOWED: YES
+        CODE_SIGN_STYLE: Automatic
   InspectorSnapshotTests:
     type: bundle.unit-test
     platform: iOS
@@ -55,3 +76,9 @@ schemes:
       targets: [InspectorSnapshotTests]
     run:
       config: Debug
+  InspectorBenchmark:
+    build:
+      targets:
+        InspectorBenchmark: all
+    run:
+      config: Release
