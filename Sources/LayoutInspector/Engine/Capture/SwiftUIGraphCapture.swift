@@ -28,6 +28,23 @@ enum SwiftUIGraphReader {
         view.responds(to: selector)
     }
 
+    /// A hosting view already on screen: SwiftUI has created a view graph (and has read `SWIFTUI_VIEW_DEBUG`).
+    /// `UIApplication.shared` is only touched if the application object exists – it doesn't in `App.init`.
+    static func existingHostingView() -> UIView? {
+        let sharedApplication = NSSelectorFromString("sharedApplication")
+        guard let app = (UIApplication.self as AnyObject).perform(sharedApplication)?.takeUnretainedValue() as? UIApplication
+        else { return nil }
+        func find(in view: UIView) -> UIView? {
+            if isHostingView(view) { return view }
+            for subview in view.subviews { if let host = find(in: subview) { return host } }
+            return nil
+        }
+        for case let scene as UIWindowScene in app.connectedScenes {
+            for window in scene.windows { if let host = find(in: window) { return host } }
+        }
+        return nil
+    }
+
     static func debugJSON(of host: UIView) -> [[String: Any]]? {
         guard isHostingView(host), let data = host.perform(selector)?.takeUnretainedValue() as? Data else { return nil }
         if let json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] { return json }

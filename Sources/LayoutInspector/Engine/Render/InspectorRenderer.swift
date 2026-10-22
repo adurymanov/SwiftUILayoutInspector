@@ -79,7 +79,10 @@ struct InspectorRenderer {
         if options.showGrid { drawGrid(ctx) }
 
         if !capture.isSwiftUIGraphAvailable && options.mode != .uikit {
-            banner(ctx, "SwiftUI graph is off – call LayoutInspector.bootstrap() at launch. Showing render tree.", color: Palette.warning)
+            let reason = GlobalState.shared.isBootstrapTooLate
+                ? "LayoutInspector.bootstrap() was called after the first SwiftUI view – call it in App.init."
+                : "SwiftUI graph is off – call LayoutInspector.bootstrap() in App.init."
+            banner(ctx, reason + " Showing render tree.", color: Palette.warning)
         }
 
         switch options.mode {

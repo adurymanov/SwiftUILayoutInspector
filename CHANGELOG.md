@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1
+
+- `LayoutInspector.bootstrap()` detects a call made after SwiftUI created its first view. SwiftUI reads
+  `SWIFTUI_VIEW_DEBUG` once per process, so such a call cannot turn recording on: it now logs a warning,
+  leaves the variable unset and `isSwiftUIGraphRecordingEnabled` reports `false` (it used to report `true`).
+  The overlay banner and `LayoutInspectorSettings` say why the SwiftUI graph is missing.
+
 ## 0.1.0
 
 First release.

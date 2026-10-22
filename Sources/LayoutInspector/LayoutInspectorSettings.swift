@@ -38,7 +38,9 @@ public struct LayoutInspectorSettings: View {
                 Toggle("Tap to select", isOn: $configuration.selectsOnTap)
                 Toggle("Refresh on changes", isOn: $configuration.autoRefresh)
                 if !LayoutInspector.isSwiftUIGraphRecordingEnabled {
-                    Label("SwiftUI graph is not recorded, only the render tree is available. Call LayoutInspector.bootstrap() at launch.",
+                    Label(GlobalState.shared.isBootstrapTooLate
+                          ? "LayoutInspector.bootstrap() was called after the first SwiftUI view, only the render tree is available. Call it in App.init."
+                          : "SwiftUI graph is not recorded, only the render tree is available. Call LayoutInspector.bootstrap() in App.init.",
                           systemImage: "exclamationmark.triangle")
                         .font(.footnote)
                         .foregroundStyle(.orange)

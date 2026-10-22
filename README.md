@@ -35,7 +35,7 @@ and the data comes from the SwiftUI runtime — the same debug graph Xcode's vie
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.1.0"),
+.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.1.1"),
 
 .target(name: "App", dependencies: [
     .product(name: "LayoutInspector", package: "SwiftUILayoutInspector"),
@@ -47,7 +47,7 @@ need access to it (a GitHub account in Xcode settings or an SSH key).
 
 ## Quick start
 
-1. Enable recording of the SwiftUI debug graph once, before the first view is created:
+1. Enable recording of the SwiftUI debug graph once, before the app's first SwiftUI view is created:
 
    ```swift
    import LayoutInspector
@@ -60,8 +60,16 @@ need access to it (a GitHub account in Xcode settings or an SSH key).
    }
    ```
 
-   Without it the inspector still works, but only sees the UIKit render tree (no component names, no
-   paddings or fonts). Setting `SWIFTUI_VIEW_DEBUG=27` in the scheme does the same.
+   `bootstrap()` sets the environment variable `SWIFTUI_VIEW_DEBUG=27` and the master switch
+   `LayoutInspector.isEnabled` — nothing else: no swizzling, no windows, no observers. SwiftUI reads the
+   variable **once per process**, when it creates its first view graph, and from then on records a debug tree
+   for every view. So the call has to come before the first SwiftUI view of the app, not just before the
+   inspected screen: `App.init`, or `application(_:willFinishLaunchingWithOptions:)` before the first
+   `UIHostingController`. A later call is detected: it logs a warning and
+   `LayoutInspector.isSwiftUIGraphRecordingEnabled` stays `false`.
+
+   Without the graph the inspector still works, but only sees the UIKit render tree (no component names, no
+   paddings or fonts). Setting `SWIFTUI_VIEW_DEBUG=27` in the scheme does the same as `bootstrap()`.
 
 2. Attach the inspector to a screen:
 
@@ -168,7 +176,7 @@ searchable view tree and shares a text layout report.
   API:
 
   ```swift
-  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.1.0", traits: []),
+  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.1.1", traits: []),
   ```
 
   `LayoutInspector.isAvailable` tells at runtime whether the inspector is compiled in.

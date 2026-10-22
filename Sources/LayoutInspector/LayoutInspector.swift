@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+#if LayoutInspectorEngine && os(iOS)
+import os
+#endif
 
 /// Shows how SwiftUI laid out a view: component bounds, paddings and gaps, fonts, frame constraints,
 /// Auto Layout of embedded UIKit views, design-rule violations and distances.
@@ -18,21 +21,38 @@ import Observation
 /// The inspected view is not changed: the overlay and the toolbar live in a separate window above the app,
 /// and the data comes from the SwiftUI runtime. Everything happens on the main thread.
 public enum LayoutInspector {
-    /// Turns the inspector on for this process. Call it once, before the first SwiftUI view is created
-    /// (`App.init` or `application(_:willFinishLaunchingWithOptions:)`).
+    /// Turns the inspector on for this process. Call it once, before the first SwiftUI view of the app is
+    /// created – not just before the inspected one: `App.init`, or
+    /// `application(_:willFinishLaunchingWithOptions:)` before the first `UIHostingController`.
     ///
-    /// It asks SwiftUI to record its debug view graph (the same data Xcode's view debugger reads).
-    /// Without it the inspector still works but only sees the UIKit render tree. Setting
-    /// `SWIFTUI_VIEW_DEBUG=27` in the scheme has the same effect.
+    /// It does two things:
+    /// - sets the environment variable `SWIFTUI_VIEW_DEBUG=27`. SwiftUI reads it once per process, when it
+    ///   creates its first view graph, and from then on records a debug tree for every view: types, values
+    ///   (paddings, frames, spacing, text attributes), positions and sizes – the data Xcode's view debugger
+    ///   reads. Setting the variable in the scheme has the same effect;
+    /// - sets the master switch ``isEnabled``.
     ///
-    /// - Parameter isEnabled: `false` keeps SwiftUI untouched and turns every inspector off
-    ///   (see ``isEnabled``), e.g. `bootstrap(isEnabled: settings.isDebugMenuEnabled)`.
+    /// A call after SwiftUI has created a view is too late: the variable is not set,
+    /// ``isSwiftUIGraphRecordingEnabled`` stays `false` and a warning is logged. The inspector then only sees
+    /// the UIKit render tree.
+    ///
+    /// - Parameter isEnabled: `false` keeps SwiftUI untouched and turns every inspector off,
+    ///   e.g. `bootstrap(isEnabled: settings.isDebugMenuEnabled)`.
     public static func bootstrap(isEnabled: Bool = true) {
         self.isEnabled = isEnabled
         #if LayoutInspectorEngine && os(iOS)
-        if isEnabled, getenv(debugEnvironmentKey) == nil {
-            setenv(debugEnvironmentKey, String(debugProperties), 1)
+        guard isEnabled, getenv(debugEnvironmentKey) == nil else { return }
+        if let host = SwiftUIGraphReader.existingHostingView() {
+            GlobalState.shared.isBootstrapTooLate = true
+            logger.error("""
+                LayoutInspector.bootstrap() was called after SwiftUI created its first view \
+                (\(TypeNames.shortClassName(host), privacy: .public)). SwiftUI reads SWIFTUI_VIEW_DEBUG once per \
+                process, so its view graph is not recorded and the inspector only sees the UIKit render tree. \
+                Call bootstrap() in App.init or before the first UIHostingController is created.
+                """)
+            return
         }
+        setenv(debugEnvironmentKey, String(debugProperties), 1)
         #endif
     }
 
@@ -58,7 +78,8 @@ public enum LayoutInspector {
         #endif
     }
 
-    /// Whether SwiftUI records its debug view graph in this process (see ``bootstrap(isEnabled:)``).
+    /// Whether SwiftUI records its debug view graph in this process: ``bootstrap(isEnabled:)`` was called in
+    /// time, or `SWIFTUI_VIEW_DEBUG` is set in the scheme.
     public static var isSwiftUIGraphRecordingEnabled: Bool {
         #if LayoutInspectorEngine && os(iOS)
         getenv(debugEnvironmentKey) != nil
@@ -93,6 +114,7 @@ public enum LayoutInspector {
     }
 
     #if LayoutInspectorEngine && os(iOS)
+    static let logger = Logger(subsystem: "LayoutInspector", category: "bootstrap")
     static let debugEnvironmentKey = "SWIFTUI_VIEW_DEBUG"
 
     /// `_ViewDebug.Property` bits: type | value | position | size.
@@ -106,4 +128,6 @@ public enum LayoutInspector {
 final class GlobalState {
     static let shared = GlobalState()
     var isEnabled = true
+    /// `bootstrap()` came after SwiftUI's first view graph: nothing is recorded in this process.
+    var isBootstrapTooLate = false
 }
