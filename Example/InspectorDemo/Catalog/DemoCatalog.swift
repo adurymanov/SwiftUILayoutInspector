@@ -27,13 +27,14 @@ struct DemoCatalog: View {
                 Section("Screens") {
                     ForEach(DemoScreen.allCases) { screen in
                         Button { open(screen) } label: { row(screen) }
+                            .tint(.primary)
                     }
                 }
                 Section {
+                    LayoutInspectorSettings($inspector)
                     Picker("Open as", selection: $presentation) {
                         ForEach(Presentation.allCases) { Text($0.title).tag($0) }
                     }
-                    LayoutInspectorSettings($inspector)
                 } header: {
                     Text("Layout inspector")
                 }

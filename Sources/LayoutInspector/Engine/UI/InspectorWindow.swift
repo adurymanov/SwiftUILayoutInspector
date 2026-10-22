@@ -149,7 +149,7 @@ struct InspectorToolbar: View {
                     }
                     .padding(.horizontal, 10)
                 }
-                HStack(spacing: 14) {
+                HStack(spacing: 12) {
                     toggle("hand.tap", "Tap to select", session.configuration.effectiveSelectsOnTap) {
                         session.configuration.selectsOnTap.toggle()
                     }
@@ -194,9 +194,9 @@ struct InspectorToolbar: View {
     private var status: some View {
         VStack(alignment: .trailing, spacing: 0) {
             if let c = session.capture {
-                Text(c.isSwiftUIGraphAvailable ? "SwiftUI graph" : "render tree only")
-                    .foregroundStyle(c.isSwiftUIGraphAvailable ? .green : .orange)
-                Text("\(c.swiftUINodes.count) nodes · \(Int(c.duration * 1000)) ms")
+                Text(c.isSwiftUIGraphAvailable ? "\(c.swiftUINodes.count) nodes" : "render tree")
+                    .foregroundStyle(c.isSwiftUIGraphAvailable ? Color.secondary : Color.orange)
+                Text("\(Int(c.duration * 1000)) ms")
                     .foregroundStyle(.secondary)
             } else {
                 Text("Capturing…").foregroundStyle(.secondary)
@@ -204,6 +204,7 @@ struct InspectorToolbar: View {
         }
         .font(.caption2.monospacedDigit())
         .lineLimit(1)
+        .fixedSize()
     }
 
     private func toggle(_ symbol: String, _ title: String, _ on: Bool, action: @escaping () -> Void) -> some View {

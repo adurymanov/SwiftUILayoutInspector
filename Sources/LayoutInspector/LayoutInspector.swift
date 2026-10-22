@@ -60,7 +60,11 @@ public enum LayoutInspector {
 
     /// Whether SwiftUI records its debug view graph in this process (see ``bootstrap(isEnabled:)``).
     public static var isSwiftUIGraphRecordingEnabled: Bool {
-        isAvailable && getenv(debugEnvironmentKey) != nil
+        #if LayoutInspectorEngine && os(iOS)
+        getenv(debugEnvironmentKey) != nil
+        #else
+        false
+        #endif
     }
 
     /// Inspects the whole key window, without changing any view. Use it from a debug menu or a gesture.
@@ -88,12 +92,14 @@ public enum LayoutInspector {
         #endif
     }
 
+    #if LayoutInspectorEngine && os(iOS)
     static let debugEnvironmentKey = "SWIFTUI_VIEW_DEBUG"
 
     /// `_ViewDebug.Property` bits: type | value | position | size.
     /// `transform` is left out on purpose: it contains scroll geometry with infinite sizes, which makes
     /// SwiftUI's own JSON serialisation fail for screens with `List`/`Form`.
     static let debugProperties: UInt32 = 0b11011
+    #endif
 }
 
 @Observable

@@ -25,7 +25,8 @@ enum UIKitCapture {
             captureLayers(of: view.layer, owner: view, into: parent, nextID: nextID, depth: 0)
         }
         for sub in view.subviews {
-            guard !excluding.contains(where: { $0 === sub }), !sub.isHidden, sub.alpha > 0.01 else { continue }
+            guard !excluding.contains(where: { $0 === sub }), !sub.isHidden, sub.alpha > 0.01,
+                  !LayoutInspectorAnchor.isAnchor(sub) else { continue }
             let isApp = insideAppView || isAppClass(sub)
             let child = makeNode(for: sub, nextID: nextID, insideAppView: isApp)
             parent.add(child)

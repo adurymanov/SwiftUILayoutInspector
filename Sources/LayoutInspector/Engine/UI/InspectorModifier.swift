@@ -58,6 +58,11 @@ struct LayoutInspectorAnchor: UIViewRepresentable {
         view.attachment.detach()
     }
 
+    /// The anchor view or the platform-view container SwiftUI wraps it into.
+    static func isAnchor(_ view: UIView) -> Bool {
+        view is AnchorView || (view.subviews.count == 1 && view.subviews[0] is AnchorView)
+    }
+
     final class AnchorView: UIView {
         let attachment: InspectorAttachment
 

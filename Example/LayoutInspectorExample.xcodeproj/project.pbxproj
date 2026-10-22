@@ -9,8 +9,10 @@
 /* Begin PBXBuildFile section */
 		331246D606F00CED407DC890 /* ScreenHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46CB109B73C950E179D3D242 /* ScreenHarness.swift */; };
 		41DC308100ECF11E5EED28BC /* DemoCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C447BB96B014B65F8A4E0BA2 /* DemoCatalog.swift */; };
+		4F86B25DFC69B757FB6DB724 /* InspectorModifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C8112008ABD14A80A786771 /* InspectorModifierTests.swift */; };
 		5A881A47C446BFB48A187037 /* CheckoutScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 233204CA8FC14371E1FC38FE /* CheckoutScreen.swift */; };
 		5F535E6180F0B17119E2C897 /* DemoScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95A354647A28F6FEB220A0D1 /* DemoScreen.swift */; };
+		674FD3AC043F382481F50ABA /* QueryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F5CCA075CF7153BF8799FBA /* QueryTests.swift */; };
 		7ABF6EDB8E678B1C86828E8F /* ProfileScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D00298E59D10603FB7A3D64 /* ProfileScreen.swift */; };
 		8A53434B8C96A22F9A91244D /* InspectorDemoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4479B745CC5644C1AC7070D /* InspectorDemoApp.swift */; };
 		93A4268125ED1E20C36E795D /* LayoutInspector in Frameworks */ = {isa = PBXBuildFile; productRef = 69B865B20AD2C7103E731CD3 /* LayoutInspector */; };
@@ -38,11 +40,13 @@
 		178B328C0A074595033B988B /* InspectorDemo.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = InspectorDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		233204CA8FC14371E1FC38FE /* CheckoutScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckoutScreen.swift; sourceTree = "<group>"; };
 		28A4A29400259CB7E6901547 /* DashboardScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardScreen.swift; sourceTree = "<group>"; };
+		2C8112008ABD14A80A786771 /* InspectorModifierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorModifierTests.swift; sourceTree = "<group>"; };
 		3431F07A9CB597F66FFE8C33 /* InspectorSnapshotTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = InspectorSnapshotTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		37A3F8BEF7F9D8F198545B3D /* DemoAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoAPI.swift; sourceTree = "<group>"; };
 		46CB109B73C950E179D3D242 /* ScreenHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenHarness.swift; sourceTree = "<group>"; };
 		6D00298E59D10603FB7A3D64 /* ProfileScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileScreen.swift; sourceTree = "<group>"; };
 		95A354647A28F6FEB220A0D1 /* DemoScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoScreen.swift; sourceTree = "<group>"; };
+		9F5CCA075CF7153BF8799FBA /* QueryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryTests.swift; sourceTree = "<group>"; };
 		AE86315FC1960613DFA134FB /* PromoScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromoScreen.swift; sourceTree = "<group>"; };
 		C447BB96B014B65F8A4E0BA2 /* DemoCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoCatalog.swift; sourceTree = "<group>"; };
 		C89B84AF92FF6D7852093555 /* RawDumpTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawDumpTests.swift; sourceTree = "<group>"; };
@@ -82,6 +86,8 @@
 		58D126D5EF2A189FE684BD94 /* InspectorSnapshotTests */ = {
 			isa = PBXGroup;
 			children = (
+				2C8112008ABD14A80A786771 /* InspectorModifierTests.swift */,
+				9F5CCA075CF7153BF8799FBA /* QueryTests.swift */,
 				C89B84AF92FF6D7852093555 /* RawDumpTests.swift */,
 				46CB109B73C950E179D3D242 /* ScreenHarness.swift */,
 				10F77105A1ED4B0D116F35E4 /* ScreenSnapshotTests.swift */,
@@ -246,6 +252,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4F86B25DFC69B757FB6DB724 /* InspectorModifierTests.swift in Sources */,
+				674FD3AC043F382481F50ABA /* QueryTests.swift in Sources */,
 				E67C9B9C3F09D22BF0162791 /* RawDumpTests.swift in Sources */,
 				331246D606F00CED407DC890 /* ScreenHarness.swift in Sources */,
 				B4E7CA87E0EC060532219DD7 /* ScreenSnapshotTests.swift in Sources */,

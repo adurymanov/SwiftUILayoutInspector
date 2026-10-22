@@ -110,6 +110,11 @@ final class InspectorSession: ObservableObject {
         resetCaptureState()
     }
 
+    /// The app window the inspected content is in (`UIWindow.window` is `nil`).
+    private var appWindow: UIWindow? {
+        (target as? UIWindow) ?? target?.window ?? anchor?.window
+    }
+
     private var excluded: [UIView] {
         excludedViews.compactMap(\.view) + (window.map { [$0] } ?? [])
     }
@@ -190,7 +195,7 @@ final class InspectorSession: ObservableObject {
     private func updateVisibility() {
         let visible = isFrontmost && configuration.isEnabled
         if visible {
-            if window == nil, let scene = (target?.window ?? anchor?.window)?.windowScene {
+            if window == nil, let scene = appWindow?.windowScene {
                 let window = InspectorWindow(windowScene: scene, session: self)
                 overlay.space = window.root.view
                 self.window = window
@@ -270,7 +275,7 @@ final class InspectorSession: ObservableObject {
     /// Follows the inspected view (presentation, scrolling) every frame; re-captures when its content
     /// changes and settles.
     fileprivate func tick() {
-        guard let target, target.window != nil, let space = overlay.space else { return }
+        guard let target, appWindow != nil, let space = overlay.space else { return }
 
         if let anchor {
             let covered = isCoveredByPresentation(anchor)
