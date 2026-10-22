@@ -25,6 +25,7 @@ final class QueryTests: XCTestCase {
         let bio = try XCTUnwrap(layout.nodes(.text).first { $0.text?.string.hasPrefix("Product designer") == true })
         XCTAssertEqual(bio.text?.isTruncated, true)
         XCTAssertEqual(bio.text?.lineCount, 3)
+        XCTAssertEqual(layout.nodes(.text).first { $0.text?.isTruncated == true }?.enclosingComponent?.title, "BioSection")
 
         let content = try XCTUnwrap(layout.nodes(.padding).first { $0.padding?.declared?.leading == 16 })
         XCTAssertEqual(content.padding?.measured.leading, 16)

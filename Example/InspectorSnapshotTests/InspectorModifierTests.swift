@@ -168,6 +168,25 @@ final class InspectorModifierTests: XCTestCase {
         try await waitUntil { overlay.transform == .identity }
     }
 
+    /// The inspector's window is above the keyboard: the toolbar must move up with it.
+    func test_toolbarStaysAboveKeyboard() async throws {
+        let harness = ScreenHarness(FocusedField().layoutInspector(.components))
+        defer { harness.tearDown() }
+        harness.window.makeKey()
+        try await waitUntil { LayoutInspector.activeWindow != nil }
+        let root = try XCTUnwrap(LayoutInspector.activeWindow?.rootViewController?.view)
+        let panel = try XCTUnwrap(root.subviews.last)
+        let bottomWithoutKeyboard = panel.frame.maxY
+
+        let keyboardShown = expectation(forNotification: UIResponder.keyboardDidShowNotification, object: nil)
+        harness.window.endEditing(false)
+        NotificationCenter.default.post(name: .focusProbeField, object: nil)
+        guard await XCTWaiter().fulfillment(of: [keyboardShown], timeout: 3) == .completed else {
+            throw XCTSkip("No software keyboard (the simulator uses the hardware keyboard)")
+        }
+        try await waitUntil { panel.frame.maxY < bottomWithoutKeyboard - 100 }
+    }
+
     func test_windowInspector() async throws {
         let harness = ScreenHarness(Text("Probe"))
         defer { harness.tearDown() }
@@ -229,6 +248,22 @@ private struct PushingScreen: View {
             .padding(80)
             .layoutInspector(.components)
             .navigationDestination(isPresented: $model.isPresenting) { Text("Pushed") }
+    }
+}
+
+extension Notification.Name {
+    static let focusProbeField = Notification.Name("focusProbeField")
+}
+
+private struct FocusedField: View {
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("Name", text: $text)
+            .focused($focused)
+            .padding(40)
+            .onReceive(NotificationCenter.default.publisher(for: .focusProbeField)) { _ in focused = true }
     }
 }
 

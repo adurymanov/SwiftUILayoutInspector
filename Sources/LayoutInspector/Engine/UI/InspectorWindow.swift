@@ -59,7 +59,8 @@ final class InspectorRootViewController: UIViewController {
         leading = panel.view.leadingAnchor.constraint(equalTo: view.leadingAnchor)
         NSLayoutConstraint.activate([
             panel.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            panel.view.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            // Above the keyboard: this window is above the keyboard's one.
+            panel.view.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
             panel.view.topAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.topAnchor),
         ])
         panel.didMove(toParent: self)
