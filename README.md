@@ -35,7 +35,7 @@ and the data comes from the SwiftUI runtime — the same debug graph Xcode's vie
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.1.1"),
+.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.1.2"),
 
 .target(name: "App", dependencies: [
     .product(name: "LayoutInspector", package: "SwiftUILayoutInspector"),
@@ -70,6 +70,7 @@ need access to it (a GitHub account in Xcode settings or an SSH key).
 
    Without the graph the inspector still works, but only sees the UIKit render tree (no component names, no
    paddings or fonts). Setting `SWIFTUI_VIEW_DEBUG=27` in the scheme does the same as `bootstrap()`.
+   [Xcode previews](#xcode-previews) don't need it.
 
 2. Attach the inspector to a screen:
 
@@ -176,7 +177,7 @@ searchable view tree and shares a text layout report.
   API:
 
   ```swift
-  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.1.1", traits: []),
+  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.1.2", traits: []),
   ```
 
   `LayoutInspector.isAvailable` tells at runtime whether the inspector is compiled in.
@@ -219,6 +220,62 @@ let image = InspectorImageRenderer.image(of: window, capture: layout, options: I
 `captureWhenStable` waits until nothing moves for `quietPeriod` and no `ProgressView` is visible (or until
 your own `until:` condition holds) and throws `CaptureTimeoutError` otherwise. `LayoutInspector.capture(_:)`
 captures immediately.
+
+## Xcode previews
+
+```swift
+#Preview {
+    ProfileScreen()
+        .layoutInspector(.spacing)
+}
+```
+
+No `bootstrap()` is needed. Xcode runs previews in processes marked with `XCODE_RUNNING_FOR_PREVIEWS=1`, and in
+such a process the library sets `SWIFTUI_VIEW_DEBUG` itself when it is loaded, before SwiftUI creates a view.
+This also covers screens in packages and frameworks, whose previews are hosted by Xcode's own app where no
+`App.init` runs. Nothing changes outside of previews.
+
+The first capture in a fresh preview process is slow — 1.5–4 s while the Swift runtime warms up — so the
+overlay shows up a moment after the screen. Xcode's own snapshot of a preview (Xcode MCP's `RenderPreview`)
+is taken earlier and shows the toolbar saying "Capturing…". To get the numbers or a picture without the
+canvas, run code instead.
+
+## Coding agents and Xcode MCP
+
+Xcode's MCP tool `RunCodeSnippet` runs code in the context of a source file, in the same kind of process as
+previews. An agent can inspect any screen of a target that links the library this way, without changing the
+project and without the modifier:
+
+```swift
+// RunCodeSnippet, sourceFilePath: the file that declares ProfileScreen
+let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+window.rootViewController = UIHostingController(rootView: ProfileScreen())
+window.isHidden = false
+window.layoutIfNeeded()
+
+let layout = LayoutInspector.capture(window)
+print(layout.report())
+print(layout.lintIssues().map(\.message).joined(separator: "\n"))
+
+// The screen with an overlay, for agents that read images
+let image = InspectorImageRenderer.image(of: window, capture: layout, options: InspectorRenderOptions(mode: .spacing))
+try image.pngData()!.write(to: URL(fileURLWithPath: "/tmp/ProfileScreen-spacing.png"))
+```
+
+```
+# Layout report – SwiftUI graph
+
+## _UIHostingView
+ProfileScreen  [@ 0,0 402×874]
+  .frame (maxHeight: .infinity, alignment: .top)  [@ 0,0 402×874]
+    .padding (24)  [measured 24 | @ 0,0 402×200.67]
+      VStack spacing 16 · .leading  [gaps 16 | @ 24,24 354×152.67]
+        Text “Profile”  [Large Title 34pt Bold | #000000 | @ 24,24 102.33×48.67]
+        …
+```
+
+The snippet's window has no scene: no safe area, no status bar. Give screens that load data the same
+fixtures as their previews.
 
 ## How it works
 

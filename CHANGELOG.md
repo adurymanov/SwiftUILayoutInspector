@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2
+
+- Xcode previews and `RunCodeSnippet` record the SwiftUI graph without `bootstrap()`: in processes with
+  `XCODE_RUNNING_FOR_PREVIEWS=1` the library sets `SWIFTUI_VIEW_DEBUG` when it is loaded. Before, previews of
+  screens in packages and frameworks (hosted by Xcode's own app, no `App.init`) only saw the render tree.
+- `InspectorImageRenderer` draws the content of a window without a scene (snippets) instead of an empty
+  background.
+
 ## 0.1.1
 
 - `LayoutInspector.bootstrap()` detects a call made after SwiftUI created its first view. SwiftUI reads

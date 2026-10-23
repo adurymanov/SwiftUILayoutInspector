@@ -36,6 +36,9 @@ public enum LayoutInspector {
     /// ``isSwiftUIGraphRecordingEnabled`` stays `false` and a warning is logged. The inspector then only sees
     /// the UIKit render tree.
     ///
+    /// Xcode previews and `RunCodeSnippet` don't need it: in their processes (`XCODE_RUNNING_FOR_PREVIEWS=1`)
+    /// the variable is set when the library is loaded.
+    ///
     /// - Parameter isEnabled: `false` keeps SwiftUI untouched and turns every inspector off,
     ///   e.g. `bootstrap(isEnabled: settings.isDebugMenuEnabled)`.
     public static func bootstrap(isEnabled: Bool = true) {

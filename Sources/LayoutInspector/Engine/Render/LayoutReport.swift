@@ -61,7 +61,8 @@ public enum LayoutReport {
     }
 }
 
-/// Renders a view (normally a window) plus the inspector overlay into an image. Used by snapshot tests.
+/// Renders a view (normally a window) plus the inspector overlay into an image. Used by snapshot tests and
+/// by code run outside of an app, e.g. Xcode's `RunCodeSnippet`.
 @MainActor
 public enum InspectorImageRenderer {
     public static func image(of view: UIView, capture: InspectorCapture?, options: InspectorRenderOptions?, scale: CGFloat = 2) -> UIImage {
@@ -71,7 +72,14 @@ public enum InspectorImageRenderer {
         return UIGraphicsImageRenderer(bounds: view.bounds, format: format).image { context in
             UIColor.systemBackground.setFill()
             context.fill(view.bounds)
-            view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
+            // `drawHierarchy` draws nothing for a window without a scene – the only kind there is in a
+            // snippet process. The layer tree renders without one.
+            if ((view as? UIWindow) ?? view.window)?.windowScene != nil {
+                view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
+            } else {
+                view.layoutIfNeeded()
+                view.layer.render(in: context.cgContext)
+            }
             if let capture, let options {
                 capture.resolveFrames(in: view)
                 InspectorRenderer(capture: capture, space: view, bounds: view.bounds, options: options).draw(in: context.cgContext)
