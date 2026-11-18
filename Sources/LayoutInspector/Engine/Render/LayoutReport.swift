@@ -1,4 +1,4 @@
-#if LayoutInspectorEngine && os(iOS)
+#if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
 import UIKit
 
 /// Approach #4 – a text "layout snapshot": stable, diff-able description of what is on screen.
@@ -77,7 +77,7 @@ public enum InspectorImageRenderer {
             if ((view as? UIWindow) ?? view.window)?.windowScene != nil {
                 view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
             } else {
-                view.layoutIfNeeded()
+                LayoutInspector.flushSwiftUIRendering(in: view)
                 view.layer.render(in: context.cgContext)
             }
             if let capture, let options {

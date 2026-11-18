@@ -1,4 +1,9 @@
 #include "LIAttributeGraph.h"
+
+// LAYOUT_INSPECTOR_DISABLED compiles the bridge out, like a disabled `LayoutInspectorEngine` trait: no dlsym
+// names and no load-time constructor. For hosts that keep the trait on but must not ship private API in some
+// build configurations (set it in GCC_PREPROCESSOR_DEFINITIONS there).
+#ifndef LAYOUT_INSPECTOR_DISABLED
 #include <dlfcn.h>
 #include <string.h>
 
@@ -82,3 +87,5 @@ __attribute__((constructor)) static void LIBootstrapForXcodePreviews(void) {
     if (previews && strcmp(previews, "1") == 0) setenv("SWIFTUI_VIEW_DEBUG", "27", 0);
 }
 #endif
+
+#endif // LAYOUT_INSPECTOR_DISABLED

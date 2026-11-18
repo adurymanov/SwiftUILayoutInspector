@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.3
+
+- The compilation condition `LAYOUT_INSPECTOR_DISABLED` compiles the engine out like a disabled
+  `LayoutInspectorEngine` trait, but per build configuration: keep the inspector in Debug and drop the private
+  API from Release.
+- `LayoutInspector.capture(_:)` and `captureWhenStable` bring a window without a scene (snippets, tests) up to
+  date before capturing, so content that changed after the first layout is drawn instead of empty boxes.
+- The repository is public, under the MIT license.
+
 ## 0.1.2
 
 - Xcode previews and `RunCodeSnippet` record the SwiftUI graph without `bootstrap()`: in processes with

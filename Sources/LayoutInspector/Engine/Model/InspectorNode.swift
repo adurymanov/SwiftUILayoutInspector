@@ -1,4 +1,4 @@
-#if LayoutInspectorEngine && os(iOS)
+#if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
 import UIKit
 
 /// What a node in the inspected hierarchy represents.

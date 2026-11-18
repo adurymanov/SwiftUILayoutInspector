@@ -1,4 +1,4 @@
-#if LayoutInspectorEngine && os(iOS)
+#if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
 import UIKit
 
 /// Thin wrapper over one `attribute` dictionary of `_ViewDebug.Data` JSON.

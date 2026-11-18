@@ -1,4 +1,4 @@
-#if LayoutInspectorEngine && os(iOS)
+#if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
 import SwiftUI
 
 /// Everything known about one node: geometry, layout modifiers, typography, stack, UIKit and raw debug values.

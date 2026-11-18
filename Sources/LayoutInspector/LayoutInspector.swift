@@ -1,6 +1,6 @@
 import Foundation
 import Observation
-#if LayoutInspectorEngine && os(iOS)
+#if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
 import os
 #endif
 
@@ -43,7 +43,7 @@ public enum LayoutInspector {
     ///   e.g. `bootstrap(isEnabled: settings.isDebugMenuEnabled)`.
     public static func bootstrap(isEnabled: Bool = true) {
         self.isEnabled = isEnabled
-        #if LayoutInspectorEngine && os(iOS)
+        #if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
         guard isEnabled, getenv(debugEnvironmentKey) == nil else { return }
         if let host = SwiftUIGraphReader.existingHostingView() {
             GlobalState.shared.isBootstrapTooLate = true
@@ -65,16 +65,17 @@ public enum LayoutInspector {
         get { GlobalState.shared.isEnabled }
         set {
             GlobalState.shared.isEnabled = newValue
-            #if LayoutInspectorEngine && os(iOS)
+            #if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
             if !newValue { InspectorPresenter.shared.hideWindowInspector() }
             #endif
         }
     }
 
-    /// `false` when the inspector is compiled out (the `LayoutInspectorEngine` package trait is disabled)
-    /// or the platform is not supported. Every API is then a no-op.
+    /// `false` when the inspector is compiled out (the `LayoutInspectorEngine` package trait is disabled, or
+    /// the compilation condition `LAYOUT_INSPECTOR_DISABLED` is set) or the platform is not supported. Every
+    /// API is then a no-op.
     public static var isAvailable: Bool {
-        #if LayoutInspectorEngine && os(iOS)
+        #if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
         true
         #else
         false
@@ -84,7 +85,7 @@ public enum LayoutInspector {
     /// Whether SwiftUI records its debug view graph in this process: ``bootstrap(isEnabled:)`` was called in
     /// time, or `SWIFTUI_VIEW_DEBUG` is set in the scheme.
     public static var isSwiftUIGraphRecordingEnabled: Bool {
-        #if LayoutInspectorEngine && os(iOS)
+        #if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
         getenv(debugEnvironmentKey) != nil
         #else
         false
@@ -94,7 +95,7 @@ public enum LayoutInspector {
     /// Inspects the whole key window, without changing any view. Use it from a debug menu or a gesture.
     /// To inspect a particular screen, attach `.layoutInspector(_:)` to it instead.
     public static func show(_ configuration: Configuration = Configuration()) {
-        #if LayoutInspectorEngine && os(iOS)
+        #if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
         guard isEnabled else { return }
         InspectorPresenter.shared.showWindowInspector(configuration)
         #endif
@@ -102,21 +103,21 @@ public enum LayoutInspector {
 
     /// Hides the inspector shown with ``show(_:)``.
     public static func hide() {
-        #if LayoutInspectorEngine && os(iOS)
+        #if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
         InspectorPresenter.shared.hideWindowInspector()
         #endif
     }
 
     /// Whether the inspector shown with ``show(_:)`` is on screen.
     public static var isVisible: Bool {
-        #if LayoutInspectorEngine && os(iOS)
+        #if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
         InspectorPresenter.shared.isWindowInspectorVisible
         #else
         false
         #endif
     }
 
-    #if LayoutInspectorEngine && os(iOS)
+    #if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
     static let logger = Logger(subsystem: "LayoutInspector", category: "bootstrap")
     static let debugEnvironmentKey = "SWIFTUI_VIEW_DEBUG"
 

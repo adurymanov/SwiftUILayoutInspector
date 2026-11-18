@@ -20,7 +20,7 @@ extension View {
     /// Changes made from the inspector's toolbar stay local to the view and are replaced when
     /// `configuration` changes.
     public func layoutInspector(_ configuration: LayoutInspector.Configuration) -> some View {
-        #if LayoutInspectorEngine && os(iOS)
+        #if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
         modifier(LocalConfigurationModifier(initial: configuration))
         #else
         self
@@ -41,7 +41,7 @@ extension View {
     /// When `configuration.isEnabled` is `false` there is no overlay, no window and no capturing. Toggling it
     /// keeps the identity of the inspected view, so its state is never reset.
     public func layoutInspector(_ configuration: Binding<LayoutInspector.Configuration>) -> some View {
-        #if LayoutInspectorEngine && os(iOS)
+        #if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
         modifier(InspectorModifier(configuration: configuration))
         #else
         self

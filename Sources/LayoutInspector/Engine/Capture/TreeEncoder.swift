@@ -1,4 +1,4 @@
-#if LayoutInspectorEngine && os(iOS)
+#if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
 import Foundation
 
 /// `Encoder` that produces Foundation collections directly (`NSMutableDictionary` / `NSMutableArray` / scalars).

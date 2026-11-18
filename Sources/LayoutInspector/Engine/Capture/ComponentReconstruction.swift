@@ -1,4 +1,4 @@
-#if LayoutInspectorEngine && os(iOS)
+#if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
 import UIKit
 
 /// Restores app-defined views (`ProfileHeader`, `StatsRow`, `TagCloud`…) in the `_ViewDebug` tree.

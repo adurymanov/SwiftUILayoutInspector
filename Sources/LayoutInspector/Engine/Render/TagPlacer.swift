@@ -1,4 +1,4 @@
-#if LayoutInspectorEngine && os(iOS)
+#if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
 import UIKit
 
 /// Places small rounded labels next to boxes, avoiding overlaps with already placed labels.

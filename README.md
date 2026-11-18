@@ -35,15 +35,14 @@ and the data comes from the SwiftUI runtime — the same debug graph Xcode's vie
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.1.2"),
+.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.1.3"),
 
 .target(name: "App", dependencies: [
     .product(name: "LayoutInspector", package: "SwiftUILayoutInspector"),
 ]),
 ```
 
-In Xcode: *File → Add Package Dependencies…* with the same URL. The repository is private, so Xcode / git
-need access to it (a GitHub account in Xcode settings or an SSH key).
+In Xcode: *File → Add Package Dependencies…* with the same URL.
 
 ## Quick start
 
@@ -179,6 +178,11 @@ searchable view tree and shares a text layout report.
   ```swift
   .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.1.2", traits: []),
   ```
+
+  Package traits apply to every build configuration. To keep the inspector in Debug and drop it from Release,
+  set the compilation condition `LAYOUT_INSPECTOR_DISABLED` for the `LayoutInspector` target in the
+  configurations that ship (for example through Tuist's `PackageSettings` or an `.xcconfig`). It compiles the
+  engine out the same way a missing trait does.
 
   `LayoutInspector.isAvailable` tells at runtime whether the inspector is compiled in.
 
@@ -371,3 +375,7 @@ TEST_RUNNER_SNAPSHOT_TESTING_RECORD=never xcodebuild test -project LayoutInspect
 ```
 
 Package unit tests run on macOS with `swift test`.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

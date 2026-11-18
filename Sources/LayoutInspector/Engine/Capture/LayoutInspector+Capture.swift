@@ -1,4 +1,4 @@
-#if LayoutInspectorEngine && os(iOS)
+#if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
 import UIKit
 
 extension LayoutInspector {
@@ -9,6 +9,7 @@ extension LayoutInspector {
     /// XCTAssertEqual(layout.find("Title", kind: .text)?.font?.size, 22)
     /// ```
     public static func capture(_ view: UIView) -> InspectorCapture {
+        flushSwiftUIRendering(in: view)
         let capture = LayoutCapture.capture(view)
         capture.resolveFrames(in: view)
         return capture
@@ -31,7 +32,7 @@ extension LayoutInspector {
         var stableSince = clock.now
         while clock.now < deadline {
             try await Task.sleep(for: .milliseconds(50))
-            view.layoutIfNeeded()
+            flushSwiftUIRendering(in: view)
             let signature = LayoutCapture.layoutSignature(of: view)
             if signature != lastSignature {
                 lastSignature = signature
@@ -45,6 +46,23 @@ extension LayoutInspector {
             }
         }
         throw CaptureTimeoutError(timeout: timeout, lastReport: capture(view).report())
+    }
+
+    /// Brings the layers of a window without a scene up to date. SwiftUI redraws such a window only when a
+    /// hosting view lays out, so whatever changed after the first layout (loaded data, inserted rows, finished
+    /// animations) is in the view graph but not yet in the layers. Windows in a scene are left alone.
+    static func flushSwiftUIRendering(in view: UIView) {
+        guard ((view as? UIWindow) ?? view.window)?.windowScene == nil else {
+            view.layoutIfNeeded()
+            return
+        }
+        setNeedsLayoutRecursively(view)
+        view.layoutIfNeeded()
+    }
+
+    private static func setNeedsLayoutRecursively(_ view: UIView) {
+        view.setNeedsLayout()
+        view.subviews.forEach(setNeedsLayoutRecursively)
     }
 
     /// The content did not settle in time.

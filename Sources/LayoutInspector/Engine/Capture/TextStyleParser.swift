@@ -1,4 +1,4 @@
-#if LayoutInspectorEngine && os(iOS)
+#if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
 import UIKit
 
 /// SwiftUI resolves every `Text` into an `NSAttributedString` (see `StyledTextContentView` in the debug graph).
