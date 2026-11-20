@@ -94,15 +94,6 @@ final class ScreenSnapshotTests: XCTestCase {
                        file: file, testName: testName, line: line)
         sheet.append(("Measure", measure))
 
-        // Selection + details card (what you get after tapping an element in the app).
-        if let selected {
-            harness.showDetails(for: selected)
-            let details = harness.image(capture, mode: .components) { $0.selectedID = selected.id; $0.showLabels = false }
-            assertSnapshot(of: details, as: .image(precision: 0.98, perceptualPrecision: 0.97), named: "details",
-                           file: file, testName: testName, line: line)
-            sheet.append(("Tap → details", details))
-        }
-
         ArtifactWriter.write(ContactSheet.make(title: screen.title, items: sheet, columns: 5), name: screen.rawValue)
     }
 }

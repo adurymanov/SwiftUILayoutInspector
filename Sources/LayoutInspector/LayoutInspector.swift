@@ -92,7 +92,9 @@ public enum LayoutInspector {
         #endif
     }
 
-    /// Inspects the whole key window, without changing any view. Use it from a debug menu or a gesture.
+    /// Inspects the window in front – the one that takes a touch in the middle of the screen – and follows it as the
+    /// app shows and hides its own windows (a debug menu, a sheet or popup in a window of its own). No view is
+    /// changed. Use it from a debug menu or a gesture.
     /// To inspect a particular screen, attach `.layoutInspector(_:)` to it instead.
     public static func show(_ configuration: Configuration = Configuration()) {
         #if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)

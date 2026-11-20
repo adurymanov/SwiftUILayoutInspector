@@ -65,9 +65,9 @@ final class InspectorModifierTests: XCTestCase {
         try await waitUntil { LayoutInspector.activeWindow != nil }
 
         model.configuration.mode = .typography
-        model.configuration.toolbar = .collapsed
+        model.configuration.toolbar = .hidden
         try await waitUntil { LayoutInspector.activeConfiguration?.mode == .typography }
-        XCTAssertEqual(LayoutInspector.activeConfiguration?.toolbar, .collapsed)
+        XCTAssertEqual(LayoutInspector.activeConfiguration?.toolbar, .hidden)
     }
 
     func test_constantConfiguration_closesLocally() async throws {

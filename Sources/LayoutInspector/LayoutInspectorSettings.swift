@@ -35,7 +35,7 @@ public struct LayoutInspectorSettings: View {
                 Picker("Controls", selection: $configuration.toolbar) {
                     ForEach(LayoutInspector.Toolbar.allCases) { Text($0.title).tag($0) }
                 }
-                Toggle("Tap to select", isOn: $configuration.selectsOnTap)
+                Toggle("Highlight on open", isOn: $configuration.highlightsOnAppear)
                 Toggle("Refresh on changes", isOn: $configuration.autoRefresh)
                 if !LayoutInspector.isSwiftUIGraphRecordingEnabled {
                     Label(GlobalState.shared.isBootstrapTooLate

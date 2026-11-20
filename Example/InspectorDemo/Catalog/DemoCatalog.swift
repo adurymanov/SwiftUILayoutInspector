@@ -4,13 +4,14 @@ import SwiftUI
 /// Demo screens, inspector settings and the way a screen is opened.
 struct DemoCatalog: View {
     enum Presentation: String, CaseIterable, Identifiable {
-        case push, sheet, fullScreen
+        case push, sheet, fullScreen, window
         var id: String { rawValue }
         var title: String {
             switch self {
             case .push: "Push"
             case .sheet: "Sheet"
             case .fullScreen: "Full screen"
+            case .window: "Window (.alert + 99)"
             }
         }
     }
@@ -89,10 +90,11 @@ struct DemoCatalog: View {
         case .push: path.append(screen)
         case .sheet: sheet = screen
         case .fullScreen: fullScreen = screen
+        case .window: OverlayWindowPresenter.present(screen, inspector: inspector)
         }
     }
 
-    /// `-screen profile -inspector spacing -presentation sheet -toolbar collapsed -select "Anna Petrova"`
+    /// `-screen profile -inspector spacing -presentation sheet -toolbar hidden -highlight tap -select "Anna Petrova"`
     private func openFromLaunchArguments() async {
         if LaunchOptions.value("-window") != nil {
             try? await Task.sleep(for: .milliseconds(300))
@@ -127,6 +129,9 @@ enum LaunchOptions {
         }
         if let toolbar = value("-toolbar").flatMap(LayoutInspector.Toolbar.init(rawValue:)) {
             configuration.toolbar = toolbar
+        }
+        if value("-highlight") == "tap" {
+            configuration.highlightsOnAppear = false
         }
         return configuration
     }

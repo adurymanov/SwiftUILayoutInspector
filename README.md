@@ -11,16 +11,16 @@ and the data comes from the SwiftUI runtime — the same debug graph Xcode's vie
 <table>
   <tr>
     <td><img src="Docs/Images/sheet-spacing.png" width="200" alt="Spacing in a sheet"></td>
-    <td><img src="Docs/Images/details.png" width="200" alt="Element details"></td>
+    <td><img src="Docs/Images/menu.png" width="200" alt="The menu"></td>
     <td><img src="Docs/Images/lint.png" width="200" alt="Lint"></td>
-    <td><img src="Docs/Images/fonts-collapsed.png" width="200" alt="Fonts, collapsed controls"></td>
+    <td><img src="Docs/Images/spacing-button.png" width="200" alt="Spacing and the control button"></td>
     <td><img src="Docs/Images/settings.png" width="200" alt="Settings rows"></td>
   </tr>
   <tr>
     <td>Spacing, sheet</td>
-    <td>Tap → details</td>
+    <td>The menu</td>
     <td>Lint, push</td>
-    <td>Fonts, full screen, collapsed controls</td>
+    <td>Spacing and the control button</td>
     <td><code>LayoutInspectorSettings</code></td>
   </tr>
 </table>
@@ -35,7 +35,7 @@ and the data comes from the SwiftUI runtime — the same debug graph Xcode's vie
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.1.3"),
+.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.0"),
 
 .target(name: "App", dependencies: [
     .product(name: "LayoutInspector", package: "SwiftUILayoutInspector"),
@@ -92,8 +92,8 @@ Everything the inspector shows is described by one value, `LayoutInspector.Confi
 | `mode` | `.components` | which overlay to draw, see [Modes](#modes) |
 | `showsLabels` | `true` | names, sizes and values next to the outlines |
 | `showsGrid`, `gridSize` | `false`, `8` | square grid over the view |
-| `toolbar` | `.expanded` | `.expanded` panel, `.collapsed` corner button, `.hidden` |
-| `selectsOnTap` | `false` | taps select elements and open their details instead of reaching the screen (always on in `.measure`) |
+| `toolbar` | `.visible` | `.visible` round glass button (drag it anywhere, tap for the menu), `.hidden` |
+| `selectsOnTap` | `false` | taps select elements (outlined in the overlay) instead of reaching the screen (always on in `.measure`) |
 | `autoRefresh` | `true` | re-capture when the content changes; scrolling is followed either way |
 | `lintRules` | see below | design rules checked in `.lint` |
 
@@ -110,7 +110,7 @@ ScreenView()
 // A configuration value. Changes made from the inspector's toolbar stay local
 // and are replaced when the value changes.
 ScreenView()
-    .layoutInspector(LayoutInspector.Configuration(mode: .lint, toolbar: .collapsed))
+    .layoutInspector(LayoutInspector.Configuration(mode: .lint, toolbar: .hidden))
 
 // A binding: change it to reconfigure the inspector at runtime; switching the mode,
 // toggling labels or closing the inspector from its toolbar writes back.
@@ -162,9 +162,10 @@ Repeated issues (rows of a `ForEach`) are merged into one line with a counter.
 | `.lint` | numbered design-rule violations and their list |
 | `.measure` | distance between two tapped elements, or from one element to its container |
 
-Tapping an element (with tap selection on) opens a card with its frame, position in the hierarchy, chain of
-layout modifiers, typography, stack values, UIKit details and raw debug values. The toolbar also has a
-searchable view tree and shares a text layout report.
+The controls are a round glass button (a material before iOS 26) that can be dragged anywhere; it remembers
+its place. A tap opens the menu: the modes, Refresh, Share report (a text layout report), Labels, Grid and
+Close. With `highlightsOnAppear: false` a screen is not captured until a mode is picked there, so nothing is
+computed while navigating; the button shows the capture's progress.
 
 ## Turning it off
 
@@ -176,7 +177,7 @@ searchable view tree and shares a text layout report.
   API:
 
   ```swift
-  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.1.2", traits: []),
+  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.0", traits: []),
   ```
 
   Package traits apply to every build configuration. To keep the inspector in Debug and drop it from Release,
@@ -192,7 +193,9 @@ While a sheet or an alert without an inspector covers the inspected view, the in
 
 ## Inspecting the whole window
 
-Without touching any view — from a debug menu or a shake gesture:
+Without touching any view — from a debug menu or a shake gesture. The inspector follows the window in front
+(the one that takes a touch in the middle of the screen), so a debug menu, sheet or popup an app shows in a
+window of its own is inspected too:
 
 ```swift
 LayoutInspector.show(.init(mode: .components))
@@ -241,7 +244,7 @@ This also covers screens in packages and frameworks, whose previews are hosted b
 
 The first capture in a fresh preview process is slow — 1.5–4 s while the Swift runtime warms up — so the
 overlay shows up a moment after the screen. Xcode's own snapshot of a preview (Xcode MCP's `RenderPreview`)
-is taken earlier and shows the toolbar saying "Capturing…". To get the numbers or a picture without the
+is taken earlier and shows the button with the capture's progress. To get the numbers or a picture without the
 canvas, run code instead.
 
 ## Coding agents and Xcode MCP
@@ -361,11 +364,12 @@ open LayoutInspectorExample.xcodeproj
 
 # open a screen right away:
 xcrun simctl launch booted dev.layoutinspector.example \
-  -screen profile -inspector spacing -presentation sheet -toolbar collapsed
+  -screen profile -inspector spacing -presentation sheet -toolbar hidden
 #   -screen        profile | feed | checkout | dashboard | promo
 #   -inspector     components | spacing | typography | constraints | uikit | lint | measure
-#   -presentation  push | sheet | fullScreen
-#   -toolbar       expanded | collapsed | hidden
+#   -presentation  push | sheet | fullScreen | window (a window of its own at .alert + 99)
+#   -toolbar       visible | hidden
+#   -highlight tap           capture only after a mode is picked in the menu
 #   -select "Anna Petrova"   select an element once the data is loaded
 #   -window                  inspect the whole window instead
 

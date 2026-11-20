@@ -18,8 +18,6 @@ final class ScreenHarness {
     }
 
     func tearDown() {
-        detailsWindow?.isHidden = true
-        detailsWindow = nil
         window.isHidden = true
         window.rootViewController = nil
     }
@@ -39,7 +37,6 @@ final class ScreenHarness {
         LayoutInspector.capture(window)
     }
 
-    private var detailsWindow: UIWindow?
 
     func image(_ capture: InspectorCapture?, mode: LayoutInspector.Mode?, configure: (inout InspectorRenderOptions) -> Void = { _ in }) -> UIImage {
         var options: InspectorRenderOptions?
@@ -48,32 +45,7 @@ final class ScreenHarness {
             configure(&o)
             options = o
         }
-        let base = InspectorImageRenderer.image(of: window, capture: capture, options: options)
-        guard let details = detailsWindow else { return base }
-        // The details card lives in the inspector's own window, above the overlay.
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = base.scale
-        return UIGraphicsImageRenderer(size: base.size, format: format).image { _ in
-            base.draw(at: .zero)
-            details.drawHierarchy(in: details.bounds, afterScreenUpdates: true)
-        }
-    }
-
-    /// Shows the details card (the same view the in-app inspector shows) in a separate transparent window.
-    func showDetails(for node: InspectorNode) {
-        let scene = window.windowScene!
-        let overlay = UIWindow(windowScene: scene)
-        overlay.frame = window.frame
-        overlay.backgroundColor = .clear
-        overlay.windowLevel = .alert + 1
-        let host = UIHostingController(rootView:
-            VStack { Spacer(); NodeDetailsView(node: node).frame(height: 330).padding(.horizontal, 10).padding(.bottom, 40) }
-        )
-        host.view.backgroundColor = .clear
-        overlay.rootViewController = host
-        overlay.isHidden = false
-        overlay.layoutIfNeeded()
-        detailsWindow = overlay
+        return InspectorImageRenderer.image(of: window, capture: capture, options: options)
     }
 }
 

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		16E23F0D20CBEACDF6256C5A /* LayoutInspector in Frameworks */ = {isa = PBXBuildFile; productRef = 0F561AC482C44DF244FEC975 /* LayoutInspector */; };
+		3124FE3872C31C20B8FE006C /* OverlayWindowPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A53963DB5E8D22189E1FF70 /* OverlayWindowPresenter.swift */; };
 		331246D606F00CED407DC890 /* ScreenHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46CB109B73C950E179D3D242 /* ScreenHarness.swift */; };
 		41ADC5C82DBC31AB671BDBB8 /* BenchmarkApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C028735499EBCC2FBC10C7C /* BenchmarkApp.swift */; };
 		41DC308100ECF11E5EED28BC /* DemoCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C447BB96B014B65F8A4E0BA2 /* DemoCatalog.swift */; };
@@ -53,15 +54,16 @@
 		37A3F8BEF7F9D8F198545B3D /* DemoAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoAPI.swift; sourceTree = "<group>"; };
 		420D69D809D37D5C97EEEAA2 /* Workloads.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Workloads.swift; sourceTree = "<group>"; };
 		46CB109B73C950E179D3D242 /* ScreenHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenHarness.swift; sourceTree = "<group>"; };
+		6A53963DB5E8D22189E1FF70 /* OverlayWindowPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayWindowPresenter.swift; sourceTree = "<group>"; };
 		6D00298E59D10603FB7A3D64 /* ProfileScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileScreen.swift; sourceTree = "<group>"; };
 		95A354647A28F6FEB220A0D1 /* DemoScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoScreen.swift; sourceTree = "<group>"; };
 		9F5CCA075CF7153BF8799FBA /* QueryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryTests.swift; sourceTree = "<group>"; };
 		AE86315FC1960613DFA134FB /* PromoScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromoScreen.swift; sourceTree = "<group>"; };
+		BE869E78F6D41A83EE004607 /* swiftui-layout-inspector */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swiftui-layout-inspector"; path = ..; sourceTree = SOURCE_ROOT; };
 		C447BB96B014B65F8A4E0BA2 /* DemoCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoCatalog.swift; sourceTree = "<group>"; };
 		C89B84AF92FF6D7852093555 /* RawDumpTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawDumpTests.swift; sourceTree = "<group>"; };
 		D4479B745CC5644C1AC7070D /* InspectorDemoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorDemoApp.swift; sourceTree = "<group>"; };
 		E8545EFD094C49A997044698 /* FeedScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedScreen.swift; sourceTree = "<group>"; };
-		FA47A06E66D55A921DC1879A /* SwiftUILayoutInspector */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SwiftUILayoutInspector; path = ..; sourceTree = SOURCE_ROOT; };
 		FE467D3CFC25555AA20CC419 /* ImageRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageRendererTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -96,7 +98,7 @@
 		33EAD0B580D32D4E068823A7 /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				FA47A06E66D55A921DC1879A /* SwiftUILayoutInspector */,
+				BE869E78F6D41A83EE004607 /* swiftui-layout-inspector */,
 			);
 			name = Packages;
 			sourceTree = "<group>";
@@ -137,6 +139,7 @@
 			children = (
 				C447BB96B014B65F8A4E0BA2 /* DemoCatalog.swift */,
 				95A354647A28F6FEB220A0D1 /* DemoScreen.swift */,
+				6A53963DB5E8D22189E1FF70 /* OverlayWindowPresenter.swift */,
 			);
 			path = Catalog;
 			sourceTree = "<group>";
@@ -297,6 +300,7 @@
 				5F535E6180F0B17119E2C897 /* DemoScreen.swift in Sources */,
 				D9AD218C1A62681C3E134511 /* FeedScreen.swift in Sources */,
 				8A53434B8C96A22F9A91244D /* InspectorDemoApp.swift in Sources */,
+				3124FE3872C31C20B8FE006C /* OverlayWindowPresenter.swift in Sources */,
 				7ABF6EDB8E678B1C86828E8F /* ProfileScreen.swift in Sources */,
 				AB948D3B346ED521D228FE35 /* PromoScreen.swift in Sources */,
 			);

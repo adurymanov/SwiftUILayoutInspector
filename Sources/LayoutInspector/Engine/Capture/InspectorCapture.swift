@@ -100,15 +100,81 @@ enum LayoutCapture {
 
     /// Captures everything visible inside `root` (a window or any view). `excluding` – inspector's own views.
     static func capture(_ root: UIView, excluding: [UIView] = []) -> InspectorCapture {
-        let start = CACurrentMediaTime()
+        let job = Job(root: root, excluding: excluding)
+        while !job.step() {}
+        return job.result!
+    }
+
+    /// A capture split into steps, so a caller can spread it over frames and show progress in between.
+    /// One step is one hosting view's AttributeGraph tree or `_ViewDebug` data, or the UIKit tree: the
+    /// `_ViewDebug` read of a large screen is the longest and cannot be split further.
+    final class Job {
+        private let steps: [Step]
+        private let output: Output
+        private let totalWeight: Double
+        private var doneWeight: Double = 0
+        private var next = 0
+
+        init(root: UIView, excluding: [UIView]) {
+            let output = Output()
+            self.output = output
+            steps = LayoutCapture.steps(root: root, excluding: excluding, output: output)
+            totalWeight = steps.reduce(0) { $0 + $1.weight }
+        }
+
+        /// 0…1, by the expected cost of the steps done.
+        var progress: Double { totalWeight > 0 ? doneWeight / totalWeight : 1 }
+
+        /// Set when the last step has run.
+        var result: InspectorCapture? { output.capture }
+
+        /// Runs the next step. `true` once the capture is ready.
+        func step() -> Bool {
+            guard next < steps.count else { return true }
+            steps[next].run()
+            doneWeight += steps[next].weight
+            next += 1
+            return next == steps.count
+        }
+
+        /// Runs steps until `budget` seconds have passed (at least one), `true` once the capture is ready.
+        func step(budget: TimeInterval) -> Bool {
+            let start = CACurrentMediaTime()
+            while !step() {
+                if CACurrentMediaTime() - start >= budget { return false }
+            }
+            return true
+        }
+    }
+
+    private struct Step {
+        let weight: Double
+        let run: () -> Void
+    }
+
+    private final class Output {
+        var capture: InspectorCapture?
+    }
+
+    private static func steps(root: UIView, excluding: [UIView], output: Output) -> [Step] {
         let nextID: () -> Int = { idCounter += 1; return idCounter }
         var timings: [String: Double] = [:]
+        var busy: Double = 0
         func measure<T>(_ key: String, _ body: () -> T) -> T {
             let t = CACurrentMediaTime()
             defer { timings[key, default: 0] += CACurrentMediaTime() - t }
             return body()
         }
+        var steps: [Step] = []
+        func add(_ weight: Double, _ body: @escaping () -> Void) {
+            steps.append(Step(weight: weight) {
+                let t = CACurrentMediaTime()
+                body()
+                busy += CACurrentMediaTime() - t
+            })
+        }
 
+        let setupStart = CACurrentMediaTime()
         ComponentReconstruction.log = []
         let allHosts = visibleHostingViews(in: root, excluding: excluding)
         // Hosts fully covered by a nested host (the app root around a NavigationStack) draw nothing themselves:
@@ -126,6 +192,7 @@ enum LayoutCapture {
             if useCache, let cached = cache[ObjectIdentifier(host)], cached.signature == signature, cached.host === host { continue }
             fresh.append(host)
         }
+        busy += CACurrentMediaTime() - setupStart
 
         // App-defined views are missing from `_ViewDebug` data – recover them from AttributeGraph.
         var agTrees: [AttributeGraphTree.Element] = []
@@ -134,52 +201,62 @@ enum LayoutCapture {
             for host in allHosts {
                 let id = ObjectIdentifier(host)
                 let signature = signatures[id] ?? layoutSignature(of: host)
-                if let cached = agCache[id], cached.signature == signature, cached.host === host, useCache {
-                    agTrees.append(cached.tree)
-                    continue
-                }
-                if !fresh.contains(where: { $0 === host }), let tree = cache[id]?.attributeGraph {
-                    agTrees.append(tree)
-                } else if let tree = measure("attributeGraph[\(TypeNames.shortClassName(host))]", { AttributeGraphTree.tree(of: host) }) {
-                    agTrees.append(tree)
-                    freshAG[id] = tree
-                    agCache[id] = AGCacheEntry(host: host, signature: signature, tree: tree)
+                let cachedAG = useCache ? agCache[id].flatMap { $0.signature == signature && $0.host === host ? $0.tree : nil } : nil
+                add(cachedAG == nil ? 1 : 0.05) {
+                    if let cachedAG {
+                        agTrees.append(cachedAG)
+                    } else if !fresh.contains(where: { $0 === host }), let tree = cache[id]?.attributeGraph {
+                        agTrees.append(tree)
+                    } else if let tree = measure("attributeGraph[\(TypeNames.shortClassName(host))]", { AttributeGraphTree.tree(of: host) }) {
+                        agTrees.append(tree)
+                        freshAG[id] = tree
+                        agCache[id] = AGCacheEntry(host: host, signature: signature, tree: tree)
+                    }
                 }
             }
         }
-        let reconstruction = measure("reconstructIndex") { ComponentReconstruction(trees: agTrees) }
+        var reconstruction: ComponentReconstruction?
+        add(0.2) { reconstruction = measure("reconstructIndex") { ComponentReconstruction(trees: agTrees) } }
 
         var roots: [InspectorNode] = []
         var graphAvailable = false
         var newCache: [ObjectIdentifier: CacheEntry] = [:]
         for host in hosts {
             let id = ObjectIdentifier(host)
-            if !fresh.contains(where: { $0 === host }), let cached = cache[id] {
-                newCache[id] = cached
-                graphAvailable = true
-                if let tree = cached.tree { roots.append(tree) }
-                continue
+            let isFresh = fresh.contains { $0 === host }
+            add(isFresh ? 4 : 0.05) {
+                if !isFresh, let cached = cache[id] {
+                    newCache[id] = cached
+                    graphAvailable = true
+                    if let tree = cached.tree { roots.append(tree) }
+                    return
+                }
+                let hostKey = "viewDebugData[\(TypeNames.shortClassName(host))]"
+                guard let json = measure(hostKey, { SwiftUIGraphReader.debugJSON(of: host) }) else { return }
+                let rawRoots = measure("rawTree") { json.map(RawDebugNode.init(json:)) }
+                rawRoots.forEach(SwiftUIGraphReader.pruneHidden)
+                if let reconstruction { measure("reconstructApply") { reconstruction.apply(to: rawRoots) } }
+                if !rawRoots.isEmpty { graphAvailable = true }
+                let tree = measure("semanticTree") { SwiftUITreeBuilder(host: host, nextID: nextID).build(roots: rawRoots) }
+                let kept = tree.children.isEmpty ? nil : tree
+                if let kept { roots.append(kept) }
+                newCache[id] = CacheEntry(host: host, signature: signatures[id] ?? 0, tree: kept, attributeGraph: freshAG[id])
             }
-            let hostKey = "viewDebugData[\(TypeNames.shortClassName(host))]"
-            guard let json = measure(hostKey, { SwiftUIGraphReader.debugJSON(of: host) }) else { continue }
-            let rawRoots = measure("rawTree") { json.map(RawDebugNode.init(json:)) }
-            rawRoots.forEach(SwiftUIGraphReader.pruneHidden)
-            measure("reconstructApply") { reconstruction.apply(to: rawRoots) }
-            if !rawRoots.isEmpty { graphAvailable = true }
-            let tree = measure("semanticTree") { SwiftUITreeBuilder(host: host, nextID: nextID).build(roots: rawRoots) }
-            let kept = tree.children.isEmpty ? nil : tree
-            if let kept { roots.append(kept) }
-            newCache[id] = CacheEntry(host: host, signature: signatures[id] ?? 0, tree: kept, attributeGraph: freshAG[id])
         }
-        cache = newCache
 
-        let uikit = measure("uikit") { UIKitCapture.capture(root: root, excluding: excluding, nextID: nextID) }
-        let capture = InspectorCapture(swiftUIRoots: roots, uikitRoot: uikit, isSwiftUIGraphAvailable: graphAvailable,
-                                       duration: CACurrentMediaTime() - start)
-        lastTimings = ["total \(Int((CACurrentMediaTime() - start) * 1000)) ms"]
-            + timings.sorted { $0.value > $1.value }.map { "\($0.key) \(Int($0.value * 1000)) ms" }
-            + ["hosts \(hosts.count), re-captured \(fresh.count)"]
-        return capture
+        add(1) {
+            cache = newCache
+            let finalStart = CACurrentMediaTime()
+            let uikit = measure("uikit") { UIKitCapture.capture(root: root, excluding: excluding, nextID: nextID) }
+            // Time spent capturing, without the frames between steps.
+            let duration = busy + CACurrentMediaTime() - finalStart
+            output.capture = InspectorCapture(swiftUIRoots: roots, uikitRoot: uikit, isSwiftUIGraphAvailable: graphAvailable,
+                                              duration: duration)
+            lastTimings = ["total \(Int(duration * 1000)) ms"]
+                + timings.sorted { $0.value > $1.value }.map { "\($0.key) \(Int($0.value * 1000)) ms" }
+                + ["hosts \(hosts.count), re-captured \(fresh.count)"]
+        }
+        return steps
     }
 
     private struct CacheEntry {
@@ -246,13 +323,18 @@ enum LayoutCapture {
             hasher.combine(layer.isHidden)
             if let contents = layer.contents { hasher.combine(ObjectIdentifier(contents as AnyObject)) }
             for sub in layer.sublayers ?? [] {
-                if let v = sub.delegate as? UIView, excluding.contains(where: { $0 === v }) { continue }
+                if let v = sub.delegate as? UIView, excluding.contains(where: { $0 === v }) || isTextCaret(v) { continue }
                 walk(sub, depth: depth + 1)
             }
         }
         walk(root.layer, depth: 0)
         hasher.combine(count)
         return hasher.finalize()
+    }
+
+    /// A blinking caret or a selection highlight changes the layer tree every half a second without changing the layout.
+    private static func isTextCaret(_ view: UIView) -> Bool {
+        view is UITextCursorView || view is UITextSelectionHighlightView
     }
 
     /// Fingerprint of scroll positions – when it changes the overlay only needs to be re-resolved, not re-captured.

@@ -20,12 +20,15 @@ extension LayoutInspector {
         public var gridSize: CGFloat
         /// How the inspector's own controls are presented.
         public var toolbar: Toolbar
-        /// Taps on the inspected area select elements (and open their details) instead of reaching the view.
+        /// Taps on the inspected area select elements (outlined in the overlay) instead of reaching the view.
         /// Always on in ``Mode/measure``.
         public var selectsOnTap: Bool
         /// Re-capture when the content changes (data loading, navigation inside the view, animations).
         /// Scrolling is followed either way.
         public var autoRefresh: Bool
+        /// Capture and highlight a screen as soon as it appears. Off: a screen stays untouched until a mode is picked
+        /// in the inspector's menu, so nothing is computed while navigating.
+        public var highlightsOnAppear: Bool
         /// Design rules checked in ``Mode/lint``.
         public var lintRules: LintRules
 
@@ -35,9 +38,10 @@ extension LayoutInspector {
             showsLabels: Bool = true,
             showsGrid: Bool = false,
             gridSize: CGFloat = 8,
-            toolbar: Toolbar = .expanded,
+            toolbar: Toolbar = .visible,
             selectsOnTap: Bool = false,
             autoRefresh: Bool = true,
+            highlightsOnAppear: Bool = true,
             lintRules: LintRules = LintRules()
         ) {
             self.isEnabled = isEnabled
@@ -48,6 +52,7 @@ extension LayoutInspector {
             self.toolbar = toolbar
             self.selectsOnTap = selectsOnTap
             self.autoRefresh = autoRefresh
+            self.highlightsOnAppear = highlightsOnAppear
             self.lintRules = lintRules
         }
 
@@ -69,6 +74,7 @@ extension LayoutInspector {
             toolbar = (try? c.decodeIfPresent(Toolbar.self, forKey: .toolbar)) ?? d.toolbar
             selectsOnTap = try c.decodeIfPresent(Bool.self, forKey: .selectsOnTap) ?? d.selectsOnTap
             autoRefresh = try c.decodeIfPresent(Bool.self, forKey: .autoRefresh) ?? d.autoRefresh
+            highlightsOnAppear = try c.decodeIfPresent(Bool.self, forKey: .highlightsOnAppear) ?? d.highlightsOnAppear
             lintRules = try c.decodeIfPresent(LintRules.self, forKey: .lintRules) ?? d.lintRules
         }
     }
@@ -133,20 +139,17 @@ extension LayoutInspector {
 
     /// How the inspector's controls are presented.
     nonisolated public enum Toolbar: String, CaseIterable, Identifiable, Codable, Sendable {
+        /// A round glass button with the mode's icon. Drag it anywhere, tap it for every option.
+        case visible
         /// No controls: the overlay is driven by the configuration only (screenshots, demos).
         case hidden
-        /// A small button in the corner. Tap to expand, press and hold to switch the mode.
-        case collapsed
-        /// Mode picker and actions at the bottom of the screen.
-        case expanded
 
         public var id: String { rawValue }
 
         public var title: String {
             switch self {
+            case .visible: "Visible"
             case .hidden: "Hidden"
-            case .collapsed: "Button"
-            case .expanded: "Panel"
             }
         }
     }

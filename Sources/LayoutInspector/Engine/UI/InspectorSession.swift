@@ -50,7 +50,10 @@ final class InspectorSession: ObservableObject {
     @Published var selectedID: Int? { didSet { syncOptions() } }
     @Published var measureTargetID: Int? { didSet { syncOptions() } }
     @Published private(set) var capture: InspectorCapture?
-    @Published var isTreePresented = false
+    /// The overlay is on: captures run and are drawn. Off: nothing is captured until a mode is picked in the menu.
+    @Published private(set) var isHighlighting: Bool
+    /// Progress of the capture in flight, 0…1; `nil` when none is running.
+    @Published private(set) var captureProgress: Double?
 
     /// Called when the configuration is changed from the toolbar (not from `apply(_:)`).
     var onConfigurationChange: ((LayoutInspector.Configuration) -> Void)?
@@ -65,9 +68,10 @@ final class InspectorSession: ObservableObject {
     private(set) var window: InspectorWindow?
 
     private var isFrontmost = false
+    /// Top edge of the pill in overlay coordinates while it is in the lower half; overlay cards stay above it.
+    private var pillTop: CGFloat?
     private var isCovered = false
     private var isApplyingExternalChange = false
-    private var toolbarTop: CGFloat?
 
     private var displayLink: CADisplayLink?
     private var frameCounter = 0
@@ -76,11 +80,18 @@ final class InspectorSession: ObservableObject {
     private var isMoving = false
     private var dirtySince: CFTimeInterval?
     private var lastCaptureTime: CFTimeInterval = 0
-    private var refreshScheduled = false
+    private var job: LayoutCapture.Job?
+    /// When the capture in flight started, and whether its progress is shown right away.
+    private var jobStart: CFTimeInterval = 0
+    private var jobShowsProgress = false
+    /// The layout the capture in flight started from: a change during the capture triggers the next one.
+    private var jobSignature = 0
+    private var stepScheduled = false
     private var cachedReport: (capture: ObjectIdentifier, text: String)?
 
     init(configuration: LayoutInspector.Configuration) {
         self.configuration = configuration
+        isHighlighting = configuration.highlightsOnAppear
         syncOptions()
     }
 
@@ -101,6 +112,9 @@ final class InspectorSession: ObservableObject {
         resetCaptureState()
     }
 
+    /// A whole-window session moves to whichever window is in front (see `InspectorPresenter.frontWindow()`).
+    var followsFrontWindow = false
+
     /// Inspect a whole window.
     func attach(window target: UIWindow) {
         anchor = nil
@@ -108,6 +122,10 @@ final class InspectorSession: ObservableObject {
         excludedViews = []
         resetCaptureState()
     }
+
+    /// The inspected content still exists. Its screen can be destroyed without `dismantleUIView` or a move out
+    /// of the window, e.g. together with a window of its own.
+    var isAttached: Bool { target != nil }
 
     /// The app window the inspected content is in (`UIWindow.window` is `nil`).
     private var appWindow: UIWindow? {
@@ -152,19 +170,18 @@ final class InspectorSession: ObservableObject {
         var options = InspectorRenderOptions(configuration)
         options.selectedID = selectedID
         options.measureTargetID = measureTargetID
-        if let toolbarTop {
+        if let pillTop {
             let bottom = overlay.scope.map { min($0.maxY, overlay.bounds.maxY) } ?? overlay.bounds.maxY
-            options.cardBottomInset = max(12, bottom - toolbarTop + 8)
+            options.cardBottomInset = max(24, bottom - pillTop + 8)
         } else {
             options.cardBottomInset = 24
         }
         overlay.options = options
     }
 
-    /// Top edge of the toolbar in overlay coordinates, `nil` when there is no toolbar.
-    func toolbarDidLayout(top: CGFloat?) {
-        guard top != toolbarTop else { return }
-        toolbarTop = top
+    func pillDidMove(top: CGFloat?) {
+        guard top != pillTop else { return }
+        pillTop = top
         syncOptions()
     }
 
@@ -198,11 +215,21 @@ final class InspectorSession: ObservableObject {
                 overlay.space = window.root.view
                 self.window = window
             }
+            window?.windowLevel = InspectorWindow.level(above: appWindow)
             window?.isHidden = isCovered
             startDisplayLink()
         } else {
-            window?.isHidden = true
-            isTreePresented = false
+            // A hidden window is released here, not kept for later: the scene retains every window attached to it,
+            // and the window retains the session. Detaching waits a turn because this can run from the window's own
+            // toolbar action.
+            if let window {
+                window.isHidden = true
+                DispatchQueue.main.async { window.windowScene = nil }
+            }
+            window = nil
+            cancelCapture()
+            // The next window lays the shared overlay out from scratch; a translation left by a transition would shift it.
+            overlay.transform = .identity
             stopDisplayLink()
         }
     }
@@ -222,19 +249,87 @@ final class InspectorSession: ObservableObject {
 
     // MARK: - Capture
 
+    /// Captures at once, blocking the main thread for the whole capture.
     func refresh() {
+        guard let target, overlay.space != nil else { return }
+        cancelCapture()
+        isHighlighting = true
+        let signature = LayoutCapture.layoutSignature(of: target, excluding: excluded)
+        finish(LayoutCapture.capture(target, excluding: excluded), signature: signature)
+    }
+
+    /// Starts a capture that runs a few steps per frame (see `runCaptureSteps()`), publishing its progress.
+    /// A capture nobody asked for (the content changed) shows progress only once it takes noticeable time, so quick
+    /// re-captures don't make the button flicker.
+    func beginCapture(requested: Bool = true) {
+        guard let target, isHighlighting else { return }
+        job = LayoutCapture.Job(root: target, excluding: excluded)
+        jobSignature = LayoutCapture.layoutSignature(of: target, excluding: excluded)
+        jobStart = CACurrentMediaTime()
+        jobShowsProgress = requested
+        captureProgress = requested ? 0 : nil
+    }
+
+    private func cancelCapture() {
+        job = nil
+        captureProgress = nil
+    }
+
+    /// Highlights the screen in `mode`, capturing it first if it is not highlighted yet. Switching between modes of
+    /// a highlighted screen only redraws: one capture serves every mode.
+    func highlight(_ mode: LayoutInspector.Mode) {
+        configuration.mode = mode
+        guard !isHighlighting else { return }
+        isHighlighting = true
+        beginCapture()
+    }
+
+    func stopHighlighting() {
+        guard isHighlighting else { return }
+        isHighlighting = false
+        cancelCapture()
+        capture = nil
+        overlay.capture = nil
+        selectedID = nil
+        measureTargetID = nil
+    }
+
+    /// Steps run on a fresh main-queue turn, outside of the display-link callback and of SwiftUI transactions,
+    /// and the next turn only comes with the next frame: the pill's progress is drawn in between.
+    private func scheduleCaptureSteps() {
+        guard !stepScheduled else { return }
+        stepScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            stepScheduled = false
+            runCaptureSteps()
+        }
+    }
+
+    private func runCaptureSteps() {
+        guard let job else { return }
+        guard isFrontmost, configuration.isEnabled, isHighlighting, !isCovered else { cancelCapture(); return }
+        if job.step(budget: 0.012), let capture = job.result {
+            cancelCapture()
+            finish(capture, signature: jobSignature)
+        } else if jobShowsProgress || CACurrentMediaTime() - jobStart > 0.3 {
+            captureProgress = job.progress
+        }
+    }
+
+    /// `signature` – the layout the capture started from. If it has changed since, the next tick re-captures.
+    private func finish(_ capture: InspectorCapture, signature: Int) {
         guard let target, let space = overlay.space else { return }
         let previousSelection = selectedNode
         let excluded = excluded
-        let capture = LayoutCapture.capture(target, excluding: excluded)
         capture.resolveFrames(in: space)
         if ProcessInfo.processInfo.environment["LAYOUT_INSPECTOR_LOG"] != nil {
             NSLog("%@", "LayoutInspector capture: " + LayoutCapture.lastTimings.joined(separator: ", "))
         }
-        layoutSignature = LayoutCapture.layoutSignature(of: target, excluding: excluded)
+        layoutSignature = signature
         scrollSignature = LayoutCapture.scrollSignature(of: target)
         lastCaptureTime = CACurrentMediaTime()
-        dirtySince = nil
+        dirtySince = LayoutCapture.layoutSignature(of: target, excluding: excluded) == signature ? nil : CACurrentMediaTime()
         self.capture = capture
         // Keep the selection across refreshes (ids change, so match by type + frame).
         if let previousSelection {
@@ -242,20 +337,6 @@ final class InspectorSession: ObservableObject {
             selectedID = match?.id
         }
         overlay.capture = capture
-    }
-
-    /// Captures on a fresh main-queue turn, outside of the display-link callback and of SwiftUI transactions.
-    func scheduleRefresh() {
-        guard !refreshScheduled else { return }
-        refreshScheduled = true
-        // The first capture of new content can take a second: let the toolbar show "Capturing…" first.
-        let delay: TimeInterval = capture == nil ? 0.05 : 0
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self else { return }
-            refreshScheduled = false
-            guard isFrontmost, configuration.isEnabled, !isCovered else { return }
-            refresh()
-        }
     }
 
     var selectedNode: InspectorNode? { selectedID.flatMap { capture?.node(withID: $0) } }
@@ -273,14 +354,24 @@ final class InspectorSession: ObservableObject {
     /// Follows the inspected view (presentation, scrolling) every frame; re-captures when its content
     /// changes and settles.
     fileprivate func tick() {
-        guard let target, appWindow != nil, let space = overlay.space else { return }
+        if followsFrontWindow, frameCounter % 10 == 0, let front = InspectorPresenter.frontWindow(), front !== target {
+            retarget(to: front)
+        }
+        // The inspected screen went away without leaving its window, e.g. together with a window of its own.
+        if !followsFrontWindow, target == nil || appWindow?.isHidden == true {
+            InspectorPresenter.shared.deactivate(self)
+            return
+        }
+        guard let target, appWindow != nil, let space = overlay.space else {
+            frameCounter += 1
+            return
+        }
 
         if let anchor {
             let covered = isCoveredByPresentation(anchor)
             if covered != isCovered {
                 isCovered = covered
                 window?.isHidden = covered
-                if covered { isTreePresented = false }
             }
             if covered { return }
             trackAnchor(anchor, in: space)
@@ -292,8 +383,12 @@ final class InspectorSession: ObservableObject {
             scrollSignature = scroll
             overlay.setNeedsDisplay()
         }
-        guard configuration.autoRefresh || capture == nil else { return }
-        guard frameCounter % 3 == 0, !refreshScheduled, !isMoving else { return }
+        if job != nil {
+            scheduleCaptureSteps()
+            return
+        }
+        guard isHighlighting, configuration.autoRefresh || capture == nil else { return }
+        guard frameCounter % 3 == 0, !isMoving else { return }
         let now = CACurrentMediaTime()
         let signature = LayoutCapture.layoutSignature(of: target, excluding: excluded)
         // Don't re-capture back to back after an expensive (cold) capture, but never wait longer than 3 s.
@@ -302,12 +397,22 @@ final class InspectorSession: ObservableObject {
             layoutSignature = signature
             if dirtySince == nil { dirtySince = now }
             // Animating content: don't wait forever for it to settle.
-            if now - lastCaptureTime > 3 { scheduleRefresh() }
+            if now - lastCaptureTime > 3 { beginCapture(requested: false) }
             return
         }
         if let dirty = dirtySince, now - dirty > 0.3, now - lastCaptureTime > minInterval || capture == nil {
-            scheduleRefresh()
+            beginCapture(requested: capture == nil)
         }
+    }
+
+    /// Highlighting stays on: the new window is captured once it settles (`capture` is `nil` again).
+    private func retarget(to front: UIWindow) {
+        if ProcessInfo.processInfo.environment["LAYOUT_INSPECTOR_LOG"] != nil {
+            NSLog("%@", "LayoutInspector: inspecting \(type(of: front)) at level \(front.windowLevel.rawValue)")
+        }
+        cancelCapture()
+        attach(window: front)
+        window?.windowLevel = InspectorWindow.level(above: front)
     }
 
     /// Keeps the overlay on the inspected view while it moves (sheet presentation, navigation transitions,
@@ -343,7 +448,7 @@ final class InspectorSession: ObservableObject {
 
     /// Whether a tap at `point` (overlay coordinates) belongs to the inspector rather than to the app.
     func catchesTap(at point: CGPoint) -> Bool {
-        configuration.effectiveSelectsOnTap && (overlay.scope?.contains(point) ?? true)
+        isHighlighting && configuration.effectiveSelectsOnTap && (overlay.scope?.contains(point) ?? true)
     }
 
     func handleTap(at point: CGPoint) {

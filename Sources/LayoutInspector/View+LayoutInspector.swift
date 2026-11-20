@@ -32,7 +32,7 @@ extension View {
     /// closing the inspector from its toolbar writes back.
     ///
     /// ```swift
-    /// @State private var inspector = LayoutInspector.Configuration(mode: .typography, toolbar: .collapsed)
+    /// @State private var inspector = LayoutInspector.Configuration(mode: .typography, toolbar: .hidden)
     ///
     /// CheckoutScreen()
     ///     .layoutInspector($inspector)
