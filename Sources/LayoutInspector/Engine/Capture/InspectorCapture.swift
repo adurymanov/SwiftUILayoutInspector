@@ -321,20 +321,18 @@ enum LayoutCapture {
             }
             hasher.combine(layer.bounds.size.width); hasher.combine(layer.bounds.size.height)
             hasher.combine(layer.isHidden)
+            // Inside a text field or view only its frame counts: the caret blinks, and TextKit 2 replaces the views
+            // that draw the text whenever the field is read – which the capture does, so it would re-capture forever.
+            if layer.delegate is UITextInput { return }
             if let contents = layer.contents { hasher.combine(ObjectIdentifier(contents as AnyObject)) }
             for sub in layer.sublayers ?? [] {
-                if let v = sub.delegate as? UIView, excluding.contains(where: { $0 === v }) || isTextCaret(v) { continue }
+                if let v = sub.delegate as? UIView, excluding.contains(where: { $0 === v }) { continue }
                 walk(sub, depth: depth + 1)
             }
         }
         walk(root.layer, depth: 0)
         hasher.combine(count)
         return hasher.finalize()
-    }
-
-    /// A blinking caret or a selection highlight changes the layer tree every half a second without changing the layout.
-    private static func isTextCaret(_ view: UIView) -> Bool {
-        view is UITextCursorView || view is UITextSelectionHighlightView
     }
 
     /// Fingerprint of scroll positions – when it changes the overlay only needs to be re-resolved, not re-captured.
