@@ -35,7 +35,7 @@ and the data comes from the SwiftUI runtime — the same debug graph Xcode's vie
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.2"),
+.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.3"),
 
 .target(name: "App", dependencies: [
     .product(name: "LayoutInspector", package: "SwiftUILayoutInspector"),
@@ -177,7 +177,7 @@ computed while navigating; the button shows the capture's progress.
   API:
 
   ```swift
-  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.2", traits: []),
+  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.3", traits: []),
   ```
 
   Package traits apply to every build configuration. To keep the inspector in Debug and drop it from Release,
@@ -287,18 +287,22 @@ fixtures as their previews.
 ## How it works
 
 1. **SwiftUI debug graph.** With `SWIFTUI_VIEW_DEBUG` set, every hosting view (screens, navigation
-   destinations, list cells) can serialize its view tree with values: padding insets, frame constraints,
+   destinations, list cells) records its view tree with values: padding insets, frame constraints,
    stack spacing and alignment, resolved text attributes, positions and sizes. The inspector reads it
-   through `makeViewDebugData` and turns it into a compact semantic tree.
+   through `_viewDebugData()` (the data behind Xcode's `makeViewDebugData`) without SwiftUI's JSON: it has
+   SwiftUI encode only the values it uses, and turns the tree into a compact semantic tree.
 2. **AttributeGraph.** The debug graph drops app-defined views that SwiftUI builds as view lists (most views
    inside stacks) and custom `Layout`s. They are restored from AttributeGraph's tree elements by matching
    the chain of types their `body` resolves to.
 3. **UIKit render tree.** Layers SwiftUI draws into, UIKit controls, `UIViewRepresentable`s with their Auto
    Layout constraints. Works without any setup.
 
-Captures are cached per hosting view and repeated when the render tree changes and settles. The first
-capture of new content in a fresh process takes about a second (up to a few seconds for a large `Form`)
-while the Swift runtime warms up; later captures take milliseconds. Everything runs on the main thread.
+Captures are cached per hosting view and repeated when the render tree changes and settles. Everything runs
+on the main thread, a few steps per frame, so the app and the button's progress ring keep moving during a
+capture. The first capture of new content is the slowest: the Swift runtime looks up protocol conformances of
+types it has not seen yet, and in a large app each lookup scans tens of thousands of records. The home screen of
+a large banking app (12 hosting views) takes about 1.2 s on the simulator, with no step longer than 80 ms;
+later captures take milliseconds.
 
 ## Performance
 
@@ -320,8 +324,10 @@ Measured with `Example/InspectorBenchmark` on an iPad Pro 11" (M2, iOS 27.0), Re
 
 The difference stays within 1%, mostly within the run-to-run spread.
 
-**The inspector open** — one capture: the first one in the process takes 1.2 s (the Swift runtime warms up),
-the first capture of the next new screen 0.42 s, repeated captures 15–16 ms.
+**The inspector open** — one capture, measured with 0.2.1: the first one in the process takes 1.2 s (the Swift
+runtime warms up), the first capture of the next new screen 0.42 s, repeated captures 15–16 ms. Since 0.2.3
+captures no longer go through SwiftUI's JSON: on the simulator the demo screens take 3–4 times less, and the
+home screen of a large app 1.2 s instead of 21 s.
 
 These are main-thread times for building, layout and committing layers; the render server and the GPU are not
 included. The content is synthetic, and other devices were not measured. The per-frame cost of an open inspector
@@ -341,20 +347,24 @@ Raw results are in `Example/InspectorBenchmark/Results/`.
 ## Private API
 
 The inspector relies on SwiftUI and AttributeGraph internals: the `makeViewDebugData` selector,
-`_viewDebugData()`, AttributeGraph's tree-element C functions (looked up with `dlsym`) and the memory layout
-of `ViewGraph`. Each level degrades on its own: without AttributeGraph there are no component names, without
-the debug graph only the render tree remains.
+`_viewDebugData()` and the layout of `_ViewDebug.Data`, AttributeGraph's tree-element and type-description C
+functions (looked up with `dlsym`) and the memory layout of `ViewGraph`. Each level degrades on its own: with an
+unknown `_ViewDebug.Data` layout the data is read through its public `Encodable` conformance (slower, same
+result), without AttributeGraph there are no component names, without the debug graph only the render tree
+remains.
 
 - Ship it in debug or internal builds only. For App Store builds, remove the dependency or compile the
   inspector out with `traits: []`.
-- Verified on iOS 27 (Xcode 27). Other iOS versions may lose some details.
+- Verified on iOS 27.0, 26.5, 18.0 and 17.5 simulators (Xcode 27). Other versions may lose some details.
 - Component matching is heuristic. `Toggle`, `TextField` and `Picker` are recognised by their UIKit parts;
-  `scaleEffect` and `rotationEffect` are not taken into account.
+  content under `scaleEffect` and `rotationEffect` is marked at its layout position, without the scale or
+  rotation.
 
 ## Example
 
-`Example/` contains a demo app with five screens (custom components and `Layout`, lazy stacks with
-skeletons, a `Form`, a grid with lint issues, `UIViewRepresentable` with Auto Layout) and the test suite:
+`Example/` contains a demo app with eight screens (custom components and `Layout`, lazy stacks with
+skeletons, a `Form`, a grid with lint issues, `UIViewRepresentable` with Auto Layout, Liquid Glass, coordinate
+spaces of `geometryGroup` and transform effects, a heavy home screen for timing) and the test suite:
 snapshot tests of every screen in every mode, query tests and tests of the modifier.
 
 ```bash

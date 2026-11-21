@@ -184,10 +184,32 @@ public struct NodeInfo {
     public var decorations: [String] = []
     public var uikit: UIKitInfo?
     public var isInternal: Bool = false
-    /// Flattened raw values from the SwiftUI debug graph (shown in the details panel).
-    public var raw: [(String, String)] = []
+    /// Flattened raw values from the SwiftUI debug graph. Worked out on first read: encoding them is most of
+    /// what reading SwiftUI's debug data costs, and a capture rarely needs them.
+    public var raw: [(String, String)] {
+        get { lazyRaw?.values ?? rawStorage }
+        set { rawStorage = newValue; lazyRaw = nil }
+    }
+    private var rawStorage: [(String, String)] = []
+    var lazyRaw: LazyRawValues?
 
     public init() {}
+}
+
+/// `NodeInfo.raw` of a SwiftUI node, flattened from its debug value when first read.
+final class LazyRawValues {
+    private var make: (() -> [(String, String)])?
+    private var resolved: [(String, String)]?
+
+    init(_ make: @escaping () -> [(String, String)]) { self.make = make }
+
+    var values: [(String, String)] {
+        if let resolved { return resolved }
+        let values = make?() ?? []
+        resolved = values
+        make = nil
+        return values
+    }
 }
 
 /// One element of a captured hierarchy: a SwiftUI view or layout modifier, or a UIKit view / render layer.

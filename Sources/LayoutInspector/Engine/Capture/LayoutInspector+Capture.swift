@@ -79,6 +79,40 @@ extension LayoutInspector {
     /// Where the time of the last capture went.
     @_spi(Diagnostics) public static var lastCaptureTimings: [String] { LayoutCapture.lastTimings }
 
+    /// Everything `capture` holds as text, without ids and addresses: diff two of them to check a change.
+    @_spi(Diagnostics) public static func dump(_ capture: InspectorCapture) -> String { CaptureDump.text(for: capture) }
+
+    /// The `_ViewDebug` tree of a hosting view as the capture reads it: one line per node with its type, readable
+    /// type, position, size and SwiftUI's encoding of its value. `nil` for other views.
+    @_spi(Diagnostics) public static func debugDataDump(of host: UIView) -> String? { ViewDebugReader.dump(of: host) }
+
+    /// One line of ``debugDataDump(of:)``, for comparing it with SwiftUI's JSON.
+    @_spi(Diagnostics) public static func debugDataDumpLine(depth: Int, type: String, readable: String, origin: CGPoint?,
+                                                           size: CGSize?, value: [String: Any]?) -> String {
+        ViewDebugReader.dumpLine(depth: depth, type: type, readable: readable, origin: origin, size: size, value: value)
+    }
+
+    /// Each lookup the capture makes on a part of a node's value against the same lookup on the whole value, for
+    /// every node of a hosting view: the differences, one per line; `nil` for other views.
+    @_spi(Diagnostics) public static func partLookupMismatches(of host: UIView) -> [String]? {
+        SwiftUITreeBuilder.partLookupMismatches(of: host)
+    }
+
+    /// Captures `view` the way the inspector on screen does: a few steps per frame within `budget` seconds.
+    @_spi(Diagnostics) public static func captureInSlices(_ view: UIView, budget: TimeInterval = 0.012) async -> InspectorCapture {
+        flushSwiftUIRendering(in: view)
+        let job = LayoutCapture.Job(root: view, excluding: [])
+        while !job.step(budget: budget) {
+            try? await Task.sleep(for: .milliseconds(16))
+        }
+        let capture = job.result!
+        capture.resolveFrames(in: view)
+        return capture
+    }
+
+    /// Forgets the trees kept from earlier captures: the next capture reads every hosting view again.
+    @_spi(Diagnostics) public static func resetCaptureCache() { LayoutCapture.resetCache() }
+
     /// How app-defined views were matched during the last capture.
     @_spi(Diagnostics) public static var lastReconstructionLog: [String] { LayoutCapture.lastReconstructionLog }
 

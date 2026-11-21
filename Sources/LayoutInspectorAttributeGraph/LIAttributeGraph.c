@@ -23,6 +23,8 @@ static GetU32Fn getFlags;
 static GetU32Fn getValue;
 static MakeChildIteratorFn makeChildIterator;
 static NextChildFn nextChild;
+typedef const void *(*TypeDescriptionFn)(const void *);
+static TypeDescriptionFn typeDescription;
 
 static void resolve(void) {
     static bool resolved = false;
@@ -35,6 +37,7 @@ static void resolve(void) {
     getValue = (GetU32Fn)dlsym(h, "AGTreeElementGetValue");
     makeChildIterator = (MakeChildIteratorFn)dlsym(h, "AGTreeElementMakeChildIterator");
     nextChild = (NextChildFn)dlsym(h, "AGTreeElementGetNextChild");
+    typeDescription = (TypeDescriptionFn)dlsym(h, "AGTypeDescription");
 }
 
 bool LIAGIsAvailable(void) {
@@ -56,6 +59,11 @@ uint32_t LIAGTreeElementGetFlags(LIAGTreeElement element) {
 
 uint32_t LIAGTreeElementGetValue(LIAGTreeElement element) {
     return LIAGIsAvailable() ? getValue(element) : 0;
+}
+
+const void *LIAGTypeDescription(const void *type) {
+    resolve();
+    return typeDescription ? typeDescription(type) : NULL;
 }
 
 int LIAGTreeElementGetChildren(LIAGTreeElement element, LIAGTreeElement *out, int max) {

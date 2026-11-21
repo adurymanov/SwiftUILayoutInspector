@@ -17,6 +17,8 @@ struct ComponentReconstruction {
         let name: String
         let chain: [String]              // body type chain, outermost first (includes nested app views' chains)
         var hoistedLayout: (name: String, typeName: String, itemChains: [[String]])?
+        /// Indices of `chain` specific enough to anchor on (see `anchor(in:byType:)`), worked out once.
+        var anchorable: [Int] = []
     }
 
     private(set) var components: [Component] = []
@@ -35,6 +37,7 @@ struct ComponentReconstruction {
                 seen.insert(element.typeName)
                 let chain = Self.chain(from: element)
                 var component = Component(typeName: element.typeName, name: TypeNames.shortName(of: element.typeName), chain: chain)
+                component.anchorable = Self.anchorableIndices(chain)
                 if let last = chain.last, let layout = Self.hoistedLayout(last, firstByType: firstByType) {
                     component.hoistedLayout = layout
                 }
@@ -117,7 +120,7 @@ struct ComponentReconstruction {
                 applyHoisted(component, layout: layout, byType: byType)
                 continue
             }
-            guard let match = anchor(in: component.chain, byType: byType) else {
+            guard let match = anchor(in: component.chain, anchorable: component.anchorable, byType: byType) else {
                 Self.log.append("\(component.name): no anchor")
                 continue
             }
@@ -137,14 +140,22 @@ struct ComponentReconstruction {
         }
     }
 
-    /// The most specific chain type present in the JSON: fewest occurrences, then the most detailed type name.
-    private func anchor(in chain: [String], byType: [String: [RawDebugNode]]) -> Int? {
-        let candidates = chain.indices.filter { i in
-            guard let nodes = byType[chain[i]], !nodes.isEmpty else { return false }
+    /// Chain types that can anchor a component. Plain `Text`, `_PaddingLayout`, `Spacer`… say nothing about
+    /// *which* view this is, nor do the wrappers that show up everywhere.
+    private static func anchorableIndices(_ chain: [String]) -> [Int] {
+        chain.indices.filter { i in
             let type = chain[i]
-            if Self.genericBases.contains(TypeNames.shortName(of: type)) { return false }
-            // Plain `Text`, `_PaddingLayout`, `Spacer`… say nothing about *which* view this is.
+            if genericBases.contains(TypeNames.shortName(of: type)) { return false }
             return type.contains("<") || TypeNames.isAppType(type)
+        }
+    }
+
+    /// The most specific chain type present in the `_ViewDebug` tree: fewest occurrences, then the most detailed
+    /// type name.
+    private func anchor(in chain: [String], anchorable: [Int]? = nil, byType: [String: [RawDebugNode]]) -> Int? {
+        let candidates = (anchorable ?? Self.anchorableIndices(chain)).filter { i in
+            guard let nodes = byType[chain[i]] else { return false }
+            return !nodes.isEmpty
         }
         guard let best = candidates.min(by: { a, b in
             let ca = byType[chain[a]]!.count, cb = byType[chain[b]]!.count

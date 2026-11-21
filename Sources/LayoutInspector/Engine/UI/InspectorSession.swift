@@ -326,6 +326,7 @@ final class InspectorSession: ObservableObject {
         if ProcessInfo.processInfo.environment["LAYOUT_INSPECTOR_LOG"] != nil {
             NSLog("%@", "LayoutInspector capture: " + LayoutCapture.lastTimings.joined(separator: ", "))
         }
+        CaptureDump.writeIfRequested(capture)
         layoutSignature = signature
         scrollSignature = LayoutCapture.scrollSignature(of: target)
         lastCaptureTime = CACurrentMediaTime()

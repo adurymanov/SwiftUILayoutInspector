@@ -58,19 +58,12 @@ enum AttributeGraphTree {
         return element(root, depth: 0)
     }
 
-    /// `String(reflecting:)` of deeply generic SwiftUI types is expensive – cache per metadata pointer.
-    private static var typeNames: [UnsafeRawPointer: String] = [:]
     private static var buffer = [LIAGTreeElement?](repeating: nil, count: 1024)
 
     private static func element(_ e: LIAGTreeElement, depth: Int) -> Element {
         var name = "?"
         if let meta = LIAGTreeElementGetType(e) {
-            if let cached = typeNames[meta] {
-                name = cached
-            } else {
-                name = String(reflecting: unsafeBitCast(meta, to: Any.Type.self))
-                typeNames[meta] = name
-            }
+            name = TypeNames.qualifiedName(of: unsafeBitCast(meta, to: Any.Type.self))
         }
         var children: [Element] = []
         if depth < 400 {

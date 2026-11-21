@@ -19,6 +19,9 @@ LIAGTreeElement _Nullable LIAGSubgraphGetTreeRoot(const void * _Nonnull subgraph
 const void * _Nullable LIAGTreeElementGetType(LIAGTreeElement _Nonnull element);
 uint32_t LIAGTreeElementGetFlags(LIAGTreeElement _Nonnull element);
 uint32_t LIAGTreeElementGetValue(LIAGTreeElement _Nonnull element);
+/// `AGTypeDescription`: the type's name without module prefixes, as SwiftUI writes it to `readableType`.
+/// NULL when the function is missing. The string is not released (one per type, callers keep it).
+const void * _Nullable LIAGTypeDescription(const void * _Nonnull type);
 /// Writes up to `max` children into `out`, returns the number of children written.
 int LIAGTreeElementGetChildren(LIAGTreeElement _Nonnull element, LIAGTreeElement _Nullable * _Nonnull out, int max);
 

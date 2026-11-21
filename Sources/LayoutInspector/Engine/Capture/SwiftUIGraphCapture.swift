@@ -3,8 +3,7 @@ import SwiftUI
 import UIKit
 
 /// Every `_UIHostingView<Content>` (and subclasses: `HostingView`, `CellHostingView`…) gets this for free:
-/// `_viewDebugData()` is a public (underscored) SwiftUI API. Going through it instead of the ObjC
-/// `makeViewDebugData` lets us encode NaN/∞ values that make SwiftUI's own serialisation fail.
+/// `_viewDebugData()` is a public (underscored) SwiftUI API, the raw data behind the ObjC `makeViewDebugData`.
 protocol ViewDebugDataProviding: AnyObject {
     func _viewDebugData() -> [_ViewDebug.Data]
 }
@@ -14,10 +13,10 @@ extension _UIHostingView: ViewDebugDataProviding {}
 /// Approach #1 – read SwiftUI's own view graph.
 ///
 /// Every `_UIHostingView` (including `HostingView` inside `NavigationStack`, `CellHostingView` in `List`,
-/// toolbar/platter hosts…) implements the ObjC method `makeViewDebugData`, the same entry point Xcode's
-/// view debugger uses. It returns `_ViewDebug.serializedData(...)` – JSON with the whole SwiftUI tree:
-/// view/modifier types, their *values* (padding insets, frame constraints, stack spacing, resolved text
-/// attributes) and the laid-out position/size of each node.
+/// toolbar/platter hosts…) implements the ObjC method `makeViewDebugData`, the entry point Xcode's view
+/// debugger uses, and `_viewDebugData()` behind it: the whole SwiftUI tree with view/modifier types, their
+/// *values* (padding insets, frame constraints, stack spacing, resolved text attributes) and the laid-out
+/// position/size of each node. `ViewDebugReader` reads it without SwiftUI's JSON.
 ///
 /// The graph only records this data when `SWIFTUI_VIEW_DEBUG` is set before the first graph is created –
 /// see `LayoutInspector.bootstrap()`.
@@ -45,18 +44,21 @@ enum SwiftUIGraphReader {
         return nil
     }
 
-    static func debugJSON(of host: UIView) -> [[String: Any]]? {
-        guard isHostingView(host), let data = host.perform(selector)?.takeUnretainedValue() as? Data else { return nil }
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] { return json }
-        // SwiftUI's JSON serialisation gives up on very deep trees (`Form`, "Too many nested arrays") and
-        // returns `{"error": …}`. Fetch `[_ViewDebug.Data]` ourselves and encode it without JSON.
-        guard let provider = host as? ViewDebugDataProviding else { return nil }
-        var tree: [[String: Any]]?
-        UpdateTrampoline.shared.run(in: host.window) {
-            tree = (try? TreeEncoder().encode(provider._viewDebugData())) as? [[String: Any]]
+    /// Runs `body` inside a SwiftUI update (`UpdateTrampoline`), giving it the function that reads the
+    /// `_ViewDebug` data of `host`: the read needs an update. The capture encodes the values the data holds in
+    /// updates too, although reflecting the copied values has not been seen to need one.
+    /// `false` when `body` did not run: `host` is not a `_UIHostingView`, or SwiftUI did not run the update.
+    @discardableResult
+    static func inUpdate(of host: UIView, _ body: (_ readDebugData: () -> [_ViewDebug.Data]) -> Void) -> Bool {
+        guard let provider = host as? ViewDebugDataProviding else { return false }
+        var ran = false
+        withoutActuallyEscaping(body) { body in
+            UpdateTrampoline.shared.run(in: host.window) {
+                ran = true
+                body { provider._viewDebugData() }
+            }
         }
-        ComponentReconstruction.log.append("\(TypeNames.shortClassName(host)): JSON serialisation failed, tree encoder \(tree == nil ? "failed" : "ok")")
-        return tree
+        return ran
     }
 
     /// Drops subtrees that are not on screen: cells kept for reuse by lazy stacks, fully transparent views.
@@ -78,11 +80,21 @@ final class UpdateTrampoline {
     static let shared = UpdateTrampoline()
     private var controller: UIHostingController<TrampolineView>?
 
+    /// The work is reachable from the view only through this box, which drops it once the update is over:
+    /// the hosting controller keeps its root view, the work must not outlive `run`.
+    final class Work {
+        var body: (() -> Void)?
+        init(_ body: @escaping () -> Void) { self.body = body }
+    }
+
     struct TrampolineView: View {
         let id: Int
-        let work: () -> Void
+        let work: Work
         var body: some View {
-            work()
+            if let body = work.body {
+                work.body = nil
+                body()
+            }
             return Color.clear
         }
     }
@@ -91,12 +103,9 @@ final class UpdateTrampoline {
 
     func run(in window: UIWindow?, _ work: @escaping () -> Void) {
         counter += 1
-        var done = false
-        let view = TrampolineView(id: counter) {
-            guard !done else { return }
-            done = true
-            work()
-        }
+        let box = Work(work)
+        defer { box.body = nil }
+        let view = TrampolineView(id: counter, work: box)
         if let controller {
             controller.rootView = view
         } else {
@@ -112,7 +121,7 @@ final class UpdateTrampoline {
         if let window, hostView.window !== window { window.addSubview(hostView) }
         hostView.setNeedsLayout()
         hostView.layoutIfNeeded()
-        if !done { _ = controller?.sizeThatFits(in: CGSize(width: 1, height: 1)) }
+        if box.body != nil { _ = controller?.sizeThatFits(in: CGSize(width: 1, height: 1)) }
         hostView.removeFromSuperview()
     }
 }
@@ -150,7 +159,7 @@ final class SwiftUITreeBuilder {
         let hostNode = InspectorNode(
             id: nextID(), kind: .host,
             title: TypeNames.shortClassName(host),
-            typeName: String(describing: type(of: host)),
+            typeName: TypeNames.name(of: type(of: host)),
             anchor: NodeAnchor(view: host, rect: host.bounds)
         )
         for root in roots {
@@ -247,8 +256,8 @@ final class SwiftUITreeBuilder {
     private func makeNode(_ raw: RawDebugNode, _ ctx: Context, kind: NodeKind, title: String,
                           detail: String? = nil, info: NodeInfo = NodeInfo()) -> InspectorNode {
         var info = info
-        if info.raw.isEmpty, let value = raw.value {
-            value.flatten(into: &info.raw, limit: 24)
+        if info.lazyRaw == nil, info.raw.isEmpty, !raw.isSynthetic {
+            info.lazyRaw = Self.rawValues(of: raw, limit: 24)
         }
         let node = InspectorNode(
             id: nextID(), kind: kind, title: title, detail: detail,
@@ -258,6 +267,15 @@ final class SwiftUITreeBuilder {
         )
         ctx.parent?.add(node)
         return node
+    }
+
+    private static func rawValues(of raw: RawDebugNode, limit: Int) -> LazyRawValues {
+        let value = raw.detachedValue()
+        return LazyRawValues {
+            var values: [(String, String)] = []
+            value()?.flatten(into: &values, limit: limit)
+            return values
+        }
     }
 
     /// The first descendant that has its own geometry = the content box inside a padding.
@@ -324,7 +342,8 @@ final class SwiftUITreeBuilder {
 
     private func classify(_ raw: RawDebugNode, _ ctx: Context) -> Classification {
         let base = raw.base
-        let value = raw.value
+        // Encoding a node's value is the expensive part of reading it: only the cases that use it touch it.
+        var value: DebugAttribute? { raw.value }
 
         // The `.layoutInspector` modifier's own background view is not part of the inspected layout.
         if Self.isInspectorAnchor(raw.readable) { return .skipSubtree }
@@ -341,7 +360,7 @@ final class SwiftUITreeBuilder {
         if TypeNames.isAppType(raw.typeName) {
             let isModifier = ctx.parentReadable.contains(", \(raw.readable)>") || ctx.parentReadable.contains(", \(base)>")
             var info = NodeInfo()
-            value?.flatten(into: &info.raw, limit: 16)
+            if !raw.isSynthetic { info.lazyRaw = Self.rawValues(of: raw, limit: 16) }
             let name = raw.isSynthetic ? raw.readable : TypeNames.shortName(of: raw.typeName)
             return .keep(isModifier ? .customModifier : .component, name, nil, info, descend: true, isControl: false)
         }
@@ -358,12 +377,13 @@ final class SwiftUITreeBuilder {
 
         case "Image", "AsyncImage":
             var info = NodeInfo()
-            let name = value?.first(named: "name")?.string ?? value?.first(named: "systemSymbol")?.string ?? ""
-            let location = value?.first(named: "location")?.string ?? ""
+            let name = Self.firstValuePart(raw, named: "name", maxDepth: 12)?.string
+                ?? Self.firstValuePart(raw, named: "systemSymbol", maxDepth: 12)?.string ?? ""
+            let location = Self.firstValuePart(raw, named: "location", maxDepth: 12)?.string ?? ""
             var natural: CGSize?
-            if let resolved = raw.children.first.flatMap({ findNode($0, base: "Resolved") })?.value,
-               let px = resolved.first(named: "unrotatedPixelSize")?.size,
-               let scale = resolved.first(named: "scale")?.number, scale > 0 {
+            if let resolved = raw.children.first.flatMap({ findNode($0, base: "Resolved") }),
+               let px = Self.firstValuePart(resolved, named: "unrotatedPixelSize", maxDepth: 12)?.size,
+               let scale = Self.firstValuePart(resolved, named: "scale", maxDepth: 12)?.number, scale > 0 {
                 natural = CGSize(width: px.width / scale, height: px.height / scale)
             }
             info.image = ImageInfo(name: name, isSymbol: location == "system", naturalSize: natural)
@@ -375,8 +395,8 @@ final class SwiftUITreeBuilder {
             var info = NodeInfo()
             let shape = raw.genericArguments.first.map(TypeNames.base) ?? "Shape"
             info.shapeName = shape
-            info.fill = describeStyle(value?["style"])
-            if let corner = value?.first(named: "cornerSize")?.size, corner.width > 0 {
+            info.fill = describeStyle(Self.valuePart(raw, "style"))
+            if let corner = Self.firstValuePart(raw, named: "cornerSize", maxDepth: 12)?.size, corner.width > 0 {
                 info.decorations.append("cornerRadius \(corner.width.pt)")
             }
             return .keep(.shape, shape, info.fill, info, descend: false, isControl: false)
@@ -389,7 +409,7 @@ final class SwiftUITreeBuilder {
         case "Spacer":
             if ctx.insideControl { return .passThrough }
             var info = NodeInfo()
-            info.spacerMinLength = value?["minLength"]?.number
+            info.spacerMinLength = Self.valuePart(raw, "minLength")?.number
             let detail = info.spacerMinLength.map { "≥\($0.pt)" }
             return .keep(.spacer, "Spacer", detail, info, descend: false, isControl: false)
 
@@ -397,7 +417,7 @@ final class SwiftUITreeBuilder {
             return .keep(.divider, "Divider", nil, NodeInfo(), descend: false, isControl: false)
 
         case "ScrollView":
-            let axis = value?.first(named: "axes")?.string ?? ""
+            let axis = Self.firstValuePart(raw, named: "axes", maxDepth: 12)?.string ?? ""
             return .keep(.scroll, "ScrollView", axis.contains("horizontal") ? "horizontal" : nil, NodeInfo(), descend: true, isControl: false)
 
         case "List", "Form":
@@ -489,12 +509,12 @@ final class SwiftUITreeBuilder {
 
         case "_BackgroundStyleModifier", "_BackgroundModifier", "_BackgroundShapeModifier":
             if ctx.insideControl { return .passThrough }
-            return .decoration(".background(\(describeStyle(value?["style"]) ?? raw.genericArguments.first.map(TypeNames.base) ?? ""))")
+            return .decoration(".background(\(describeStyle(Self.valuePart(raw, "style")) ?? raw.genericArguments.first.map(TypeNames.base) ?? ""))")
         case "_OverlayModifier", "_OverlayStyleModifier", "_OverlayShapeModifier":
             return .decoration(".overlay(\(raw.genericArguments.first.map(TypeNames.base) ?? ""))")
         case "_ClipEffect":
             let shape = raw.genericArguments.first.map(TypeNames.base) ?? ""
-            if let corner = value?.first(named: "cornerSize")?.size, corner.width > 0 {
+            if let corner = Self.firstValuePart(raw, named: "cornerSize", maxDepth: 12)?.size, corner.width > 0 {
                 return .decoration(".clipShape(\(shape), r \(corner.width.pt))")
             }
             return .decoration(".clipShape(\(shape))")
@@ -515,9 +535,8 @@ final class SwiftUITreeBuilder {
         if let axis = Self.stacks[base] {
             if isInternal(raw, ctx) || ctx.insideControl { return .passThrough }
             var info = NodeInfo()
-            let root = value?.at("_tree", "root") ?? value?["root"] ?? value
-            let spacing = root?.first(named: "spacing", maxDepth: 3)?.number
-            var alignment = root?.first(named: "alignment", maxDepth: 3)
+            let spacing = Self.stackLayoutValue(raw, "spacing")?.number
+            var alignment = Self.stackLayoutValue(raw, "alignment")
             if alignment?.string == nil, let h = alignment?["horizontal"]?.string, let v = alignment?["vertical"]?.string {
                 info.stack = StackInfo(axis: axis, name: base, alignment: alignmentName(horizontal: h, vertical: v), spacing: spacing)
                 alignment = nil
@@ -534,12 +553,163 @@ final class SwiftUITreeBuilder {
             // SwiftUI's own layouts (navigation bar items and the like) are not the app's.
             if raw.typeName.contains("_LayoutRoot<SwiftUI.") || raw.typeName.contains("_LayoutRoot<SwiftUICore.") { return .passThrough }
             var info = NodeInfo()
-            let spacing = value?.first(named: "spacing", maxDepth: 4)?.number
+            let spacing = Self.firstValuePart(raw, named: "spacing", maxDepth: 4)?.number
             info.stack = StackInfo(axis: .grid, name: layoutName, alignment: nil, spacing: spacing)
             return .keep(.stack, layoutName, spacing.map { "spacing \($0.pt)" } ?? "Layout", info, descend: true, isControl: false)
         }
 
         return .passThrough
+    }
+
+    // MARK: - Values ahead of the build
+
+    /// Nodes whose values `classify` and `textInfo` read. The capture encodes them in slices across frames
+    /// before it builds the tree; a node left out is encoded during the build, only later.
+    static func nodesReadingValues(in roots: [RawDebugNode]) -> [RawDebugNode] {
+        var result: [RawDebugNode] = []
+        func visit(_ node: RawDebugNode) {
+            if valueReadingBases.contains(node.base) || stacks[node.base] != nil
+                || (node.base == "_TraitWritingModifier" && node.readable.contains("LayoutPriority"))
+                || (node.base == "_VariadicView.Tree" && node.readable.contains("_LayoutRoot<")) {
+                result.append(node)
+            }
+            node.children.forEach(visit)
+        }
+        roots.forEach(visit)
+        return result
+    }
+
+    private static let valueReadingBases: Set<String> = [
+        "StyledTextContentView", "Image", "AsyncImage", "Resolved", "_ShapeView", "Color", "Spacer", "ScrollView",
+        "_PaddingLayout", "_FrameLayout", "_FlexFrameLayout", "_FixedSizeLayout", "_AspectRatioLayout", "_OffsetEffect",
+        "_SafeAreaRegionsIgnoringLayout", "_SafeAreaIgnoringLayout", "_BackgroundStyleModifier", "_BackgroundModifier",
+        "_BackgroundShapeModifier", "_ClipEffect", "_ShadowEffect",
+    ]
+
+    /// Encodes what the build will read from `node`, the same way it reads it.
+    static func prepareValues(of node: RawDebugNode) {
+        switch node.base {
+        case "StyledTextContentView":
+            _ = firstValuePart(node, named: "string", maxDepth: 12)
+            _ = firstValuePart(node, named: "entries", maxDepth: 12)
+        case "Image", "AsyncImage":
+            _ = firstValuePart(node, named: "name", maxDepth: 12)
+            _ = firstValuePart(node, named: "location", maxDepth: 12)
+        case "Resolved":
+            _ = firstValuePart(node, named: "unrotatedPixelSize", maxDepth: 12)
+            _ = firstValuePart(node, named: "scale", maxDepth: 12)
+        case "_BackgroundStyleModifier", "_BackgroundModifier", "_BackgroundShapeModifier":
+            _ = valuePart(node, "style")
+        case "_ShapeView":
+            _ = valuePart(node, "style")
+            _ = firstValuePart(node, named: "cornerSize", maxDepth: 12)
+        case "_ClipEffect":
+            _ = firstValuePart(node, named: "cornerSize", maxDepth: 12)
+        case "Spacer":
+            _ = valuePart(node, "minLength")
+        case "ScrollView":
+            _ = firstValuePart(node, named: "axes", maxDepth: 12)
+        case "_VariadicView.Tree":
+            _ = firstValuePart(node, named: "spacing", maxDepth: 4)
+        case _ where stacks[node.base] != nil:
+            _ = stackLayoutValue(node, "spacing")
+            _ = stackLayoutValue(node, "alignment")
+        default:
+            _ = node.value
+        }
+    }
+
+    // MARK: - Checking the parts (diagnostics)
+
+    private enum PartLookup {
+        case path([String]), first(String, Int), stack(String)
+    }
+
+    private static func partLookups(for base: String) -> [PartLookup] {
+        switch base {
+        case "StyledTextContentView": [.first("string", 12), .first("entries", 12)]
+        case "Image", "AsyncImage": [.first("name", 12), .first("systemSymbol", 12), .first("location", 12)]
+        case "Resolved": [.first("unrotatedPixelSize", 12), .first("scale", 12)]
+        case "_BackgroundStyleModifier", "_BackgroundModifier", "_BackgroundShapeModifier": [.path(["style"])]
+        case "_ShapeView": [.path(["style"]), .first("cornerSize", 12)]
+        case "_ClipEffect": [.first("cornerSize", 12)]
+        case "Spacer": [.path(["minLength"])]
+        case "ScrollView": [.first("axes", 12)]
+        case "Text": [.first("verbatim", 12)]
+        case "_VariadicView.Tree": [.first("spacing", 4)]
+        case _ where stacks[base] != nil: [.stack("spacing"), .stack("alignment")]
+        default: []
+        }
+    }
+
+    /// Every lookup the build makes on a part of a value, compared with the same lookup on the whole encoded
+    /// value: one line per difference, `nil` when the data could not be read.
+    static func partLookupMismatches(of host: UIView) -> [String]? {
+        var result: [String]?
+        SwiftUIGraphReader.inUpdate(of: host) { readDebugData in
+            let data = readDebugData()
+            guard let parts = ViewDebugReader.trees(data, host: host), let wholes = ViewDebugReader.trees(data, host: host) else { return }
+            var partNodes: [RawDebugNode] = [], wholeNodes: [RawDebugNode] = []
+            parts.forEach { $0.forEach { partNodes.append($0) } }
+            wholes.forEach { $0.forEach { wholeNodes.append($0) } }
+            var lines: [String] = []
+            func json(_ a: DebugAttribute?) -> String {
+                a.flatMap { try? JSONSerialization.data(withJSONObject: $0.raw, options: [.sortedKeys]) }
+                    .flatMap { String(data: $0, encoding: .utf8) } ?? "nil"
+            }
+            for (part, whole) in zip(partNodes, wholeNodes) {
+                for lookup in partLookups(for: part.base) {
+                    let a: DebugAttribute?, b: DebugAttribute?
+                    switch lookup {
+                    case let .path(path):
+                        a = valuePart(part, path); b = whole.value?.at(path)
+                    case let .first(name, depth):
+                        a = firstValuePart(part, named: name, maxDepth: depth); b = whole.value?.first(named: name, maxDepth: depth)
+                    case let .stack(name):
+                        a = stackLayoutValue(part, name)
+                        let value = whole.value
+                        b = (value?.at("_tree", "root") ?? value?["root"] ?? value)?.first(named: name, maxDepth: 3)
+                    }
+                    let (x, y) = (json(a), json(b))
+                    if x != y { lines.append("\(part.readable.prefix(80)) \(lookup): part \(x.prefix(300)) whole \(y.prefix(300))") }
+                }
+            }
+            result = lines
+        }
+        return result
+    }
+
+    // MARK: - Parts of values
+    //
+    // A container's value holds its whole content, which makes it the most expensive value to encode. The facts
+    // read from it sit near the top, so only those parts are encoded (see `RawDebugNode.valuePart`).
+
+    static func valuePart(_ raw: RawDebugNode, _ path: String...) -> DebugAttribute? {
+        valuePart(raw, path)
+    }
+
+    static func valuePart(_ raw: RawDebugNode, _ path: [String]) -> DebugAttribute? {
+        raw.valuePart(path) ?? raw.value?.at(path)
+    }
+
+    static func firstValuePart(_ raw: RawDebugNode, named name: String, maxDepth: Int) -> DebugAttribute? {
+        raw.firstValuePart(named: name, maxDepth: maxDepth) ?? raw.value?.first(named: name, maxDepth: maxDepth)
+    }
+
+    /// `name` in a stack's layout: `_tree.root` of a `VStack`, `root`, or the value itself (`LazyVStack`).
+    static func stackLayoutValue(_ raw: RawDebugNode, _ name: String) -> DebugAttribute? {
+        switch raw.valuePart(["_tree", "root"]) {
+        case let .some(.some(root)): return root.first(named: name, maxDepth: 3)
+        case .some(.none):
+            switch raw.valuePart(["root"]) {
+            case let .some(.some(root)): return root.first(named: name, maxDepth: 3)
+            case .some(.none): return firstValuePart(raw, named: name, maxDepth: 3)
+            case .none: break
+            }
+        case .none: break
+        }
+        let value = raw.value
+        return (value?.at("_tree", "root") ?? value?["root"] ?? value)?.first(named: name, maxDepth: 3)
     }
 
     /// `LayoutInspectorAnchor`, `Optional<LayoutInspectorAnchor>`, `PlatformViewRepresentableAdaptor<LayoutInspectorAnchor>`.
@@ -557,8 +727,8 @@ final class SwiftUITreeBuilder {
     // MARK: - Text
 
     private func textInfo(for raw: RawDebugNode, rect: CGRect) -> TextInfo? {
-        let styled = findNode(raw, base: "StyledTextContentView")?.value
-        let description = styled?.first(named: "string")?.string
+        let styled = findNode(raw, base: "StyledTextContentView")
+        let description = styled.flatMap { Self.firstValuePart($0, named: "string", maxDepth: 12) }?.string
         var info: TextInfo
         if let description {
             let runs = TextStyleParser.runs(fromDescription: description)
@@ -572,14 +742,14 @@ final class SwiftUITreeBuilder {
                 info.alignment = TextStyleParser.alignment(fromAttributes: attrs)
                 info.kerning = TextStyleParser.kerning(fromAttributes: attrs)
             }
-        } else if let verbatim = raw.value?.first(named: "verbatim")?.string {
+        } else if let verbatim = Self.firstValuePart(raw, named: "verbatim", maxDepth: 12)?.string {
             info = TextInfo(string: verbatim)
         } else {
             return nil
         }
 
         // Layout metrics cached by SwiftUI for each size proposal; pick the one matching the final size.
-        if let entries = styled?.first(named: "entries")?.subattributes, !entries.isEmpty {
+        if let entries = styled.flatMap({ Self.firstValuePart($0, named: "entries", maxDepth: 12) })?.subattributes, !entries.isEmpty {
             let metrics = entries.compactMap { $0[".1"] }
             let best = metrics.min { a, b in
                 let sa = a["size"]?.size ?? .zero, sb = b["size"]?.size ?? .zero
@@ -613,7 +783,7 @@ final class SwiftUITreeBuilder {
             }
         }
         walk(host)
-        let hosting = result.filter { String(describing: type(of: $0)).contains("HostingScrollView") }
+        let hosting = result.filter { TypeNames.name(of: type(of: $0)).contains("HostingScrollView") }
         return hosting.isEmpty ? result : hosting
     }
 

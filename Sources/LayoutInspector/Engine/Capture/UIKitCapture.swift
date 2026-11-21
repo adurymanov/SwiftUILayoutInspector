@@ -51,7 +51,7 @@ enum UIKitCapture {
                 if let bg = sub.backgroundColor { info.fill = TextStyleParser.hex(UIColor(cgColor: bg)) }
                 if sub.cornerRadius > 0 { info.decorations.append("cornerRadius \(sub.cornerRadius.pt)") }
                 let node = InspectorNode(id: nextID(), kind: .renderLayer, title: title, detail: className,
-                                         typeName: String(describing: type(of: sub)),
+                                         typeName: TypeNames.name(of: type(of: sub)),
                                          anchor: NodeAnchor(view: owner, rect: owner.layer.convert(sub.bounds, from: sub)),
                                          info: info)
                 parent.add(node)
@@ -109,7 +109,7 @@ enum UIKitCapture {
         info.uikit = ui
         let detail: String? = ui.text.map { "“\($0.prefix(30))”" }
         return InspectorNode(id: nextID(), kind: .uikitView, title: ui.className, detail: detail,
-                             typeName: String(describing: type(of: view)),
+                             typeName: TypeNames.name(of: type(of: view)),
                              anchor: NodeAnchor(view: view, rect: view.bounds), info: info)
     }
 
@@ -118,7 +118,7 @@ enum UIKitCapture {
     private static func isAppClass(_ view: UIView) -> Bool {
         let bundle = Bundle(for: type(of: view))
         if let id = bundle.bundleIdentifier, !id.hasPrefix("com.apple.") { return true }
-        let full = String(reflecting: type(of: view))
+        let full = TypeNames.qualifiedName(of: type(of: view))
         guard full.contains("PlatformViewRepresentableAdaptor") || full.contains("PlatformViewControllerRepresentableAdaptor") else { return false }
         let modules = full.matches(of: #/([A-Za-z_][A-Za-z0-9_]*)\./#).map { String($0.output.1) }
         return modules.contains { !TypeNames.systemModules.contains($0) && $0 != "PlatformViewRepresentableAdaptor" }
@@ -136,7 +136,7 @@ enum UIKitCapture {
             for c in owner.constraints where c.isActive && !seen.contains(ObjectIdentifier(c)) {
                 guard (c.firstItem as AnyObject?) === view || (c.secondItem as AnyObject?) === view else { continue }
                 // Skip system-generated content-size constraints.
-                let cls = String(describing: type(of: c))
+                let cls = TypeNames.name(of: type(of: c))
                 if cls.contains("ContentSize") || cls.contains("Autoresizing") { continue }
                 seen.insert(ObjectIdentifier(c))
                 let flipped = (c.firstItem as AnyObject?) !== view
