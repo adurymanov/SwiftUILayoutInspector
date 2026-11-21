@@ -461,7 +461,7 @@ struct Shake: GeometryEffect {
     }
 }
 
-/// Built like a banking app's `ScaleWaveEffect`: a scale, then a move back by half the dot.
+/// Built like a banking app's passcode dot effect: a scale, then a move back by half the dot.
 struct Wave: GeometryEffect {
     var scale: CGFloat
     var shift: CGFloat = 0

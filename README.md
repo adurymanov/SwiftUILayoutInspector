@@ -35,7 +35,7 @@ and the data comes from the SwiftUI runtime — the same debug graph Xcode's vie
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.8"),
+.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.9"),
 
 .target(name: "App", dependencies: [
     .product(name: "LayoutInspector", package: "SwiftUILayoutInspector"),
@@ -225,7 +225,7 @@ top-level `environment`, and the same `properties` per component when the app ru
   API:
 
   ```swift
-  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.8", traits: []),
+  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.9", traits: []),
   ```
 
   Package traits apply to every build configuration. To keep the inspector in Debug and drop it from Release,
@@ -397,6 +397,7 @@ runtime warms up), the first capture of the next new screen 0.42 s, repeated cap
 captures no longer go through SwiftUI's JSON: on the simulator the demo screens take 3–4 times less, and the
 home screen of a large app 1.2 s instead of 21 s. 0.2.4 added component names that cost such a screen another 3–4 s;
 0.2.5 brings it back to 1.3 s with the same names.
+0.2.9 places the names on the demo's heavy screen in 10 ms instead of 63 ms (0.2.3: 7 ms).
 
 These are main-thread times for building, layout and committing layers; the render server and the GPU are not
 included. The content is synthetic, and other devices were not measured. The per-frame cost of an open inspector

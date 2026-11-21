@@ -228,6 +228,7 @@ enum LayoutCapture {
 
         let setupStart = CACurrentMediaTime()
         ComponentReconstruction.log = []
+        ComponentReconstruction.applySpent = [:]
         ViewDebugReader.encodingTimes = [:]
         let allHosts = visibleHostingViews(in: root, excluding: excluding)
         // Hosts fully covered by a nested host (the app root around a NavigationStack) draw nothing themselves:
@@ -360,6 +361,7 @@ enum LayoutCapture {
                 + timings.sorted { $0.value > $1.value }.map { "\($0.key) \(Int($0.value * 1000)) ms" }
                 + ViewDebugReader.encodingSummary
                 + (timings["reconstructIndex"] == nil ? [] : ComponentReconstruction.phases.map { "index.\($0.0) \(Int($0.1 * 1000)) ms" })
+                + (timings["reconstructApply"] == nil ? [] : ComponentReconstruction.applySpent.sorted { $0.value > $1.value }.map { "apply.\($0.0) \(Int($0.1 * 1000)) ms" })
                 + ["hosts \(hosts.count), re-captured \(fresh.count)",
                    "longest step \(Int(max(longest, CACurrentMediaTime() - finalStart) * 1000)) ms"]
         }

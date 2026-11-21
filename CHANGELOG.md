@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.9
+
+- Placing component names is fast again. 0.2.4 added a check of whether one view is built from another, and it
+  searched kilobytes of type names for every pair of views that claim the same node. Every hosting view also
+  looked up all of a screen's chain types by their full names. On the demo's heavy screen the step takes 9–11 ms
+  instead of 63–65 ms (0.2.3: 6–7 ms). Names and placement are unchanged.
+- Timings (`LAYOUT_INSPECTOR_LOG=1`, `lastCaptureTimings`) break placement into `apply.*` phases, the way they
+  already break down the component index (`index.*`).
+- The demo's timing test also limits placement (`TEST_RUNNER_APPLY_LIMIT_MS`, 40 ms by default).
+- Comments, tests and the demo no longer use type names from the banking app they were modelled on.
+
 ## 0.2.8
 
 - Dev → Components list: a sheet with the app's views on the screen, nested as on screen, with frames and

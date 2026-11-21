@@ -103,12 +103,12 @@ struct TransactionsCard: View {
             }
         }
         .padding(20)
-        .modifier(WidgetGlassCard())
+        .modifier(GlassCardModifier())
     }
 }
 
 @available(iOS 26.0, *)
-struct WidgetGlassCard: ViewModifier {
+struct GlassCardModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(Color.clear.contentShape(.rect).onTapGesture {})
