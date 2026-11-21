@@ -193,9 +193,11 @@ final class SwiftUITreeBuilder {
         let isApp = TypeNames.isAppType(raw.typeName)
         let name = TypeNames.shortName(of: raw.typeName)
         if !isApp, coordinateSpaceModifiers.contains(name) { return true }
+        guard isApp || contentDependentSpaceModifiers.contains(name) else { return false }
+        // A conformance check scans every conformance in the app the first time for a type: only for the few nodes
+        // that get here, not for every node of the tree.
         let isGeometryEffect = raw.swiftValue is any GeometryEffect
-        guard isApp || contentDependentSpaceModifiers.contains(name),
-              let outer = raw.geometry ?? (isGeometryEffect ? box : nil) else { return false }
+        guard let outer = raw.geometry ?? (isGeometryEffect ? box : nil) else { return false }
         // At the origin of the space the corner is the same either way; open it so the effect's transform applies.
         if outer.origin == .zero { return isGeometryEffect }
         guard let inner = raw.children.lazy.compactMap({ $0.firstGeometry }).first else { return false }

@@ -156,6 +156,9 @@ struct AccountWidget: View {
             ForEach(account.transactions.prefix(5)) { transaction in
                 TransactionRow(transaction: transaction, account: account)
             }
+            ChainedBalanceRow(title: "Available", value: "\(account.balance)")
+            ChainedLimitRow(title: "Daily limit", value: "\(account.limits.daily)")
+            ChainedTagRow(title: account.currency, value: account.flags.joined(separator: ", "))
             AccountFooter(account: account, home: home)
         }
         .card()

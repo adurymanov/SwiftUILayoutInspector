@@ -17,38 +17,62 @@ struct ComponentReconstruction {
         let name: String
         let chain: [String]              // body type chain, outermost first (includes nested app views' chains)
         var hoistedLayout: (name: String, typeName: String, itemChains: [[String]])?
-        /// Indices of `chain` specific enough to anchor on (see `anchor(in:byType:)`), worked out once.
+        /// Indices of `chain` that may anchor it: generic or app types (see `mayAnchor`), worked out once. Whether
+        /// one is only a wrapper (`isUninformative`) is checked for the ones a host's tree has.
         var anchorable: [Int] = []
         /// How many of it AttributeGraph holds, in every host.
         var instances = 1
+        /// Its place in `components`.
+        var id = 0
     }
 
     private(set) var components: [Component] = []
     /// Human-readable matching log (exposed via `LayoutCapture.lastReconstructionLog`).
     static var log: [String] = []
 
+    /// Where building the index went, for `LayoutCapture.lastTimings` (diagnostics).
+    static var phases: [(String, Double)] = []
+
     init(trees: [AttributeGraphTree.Element]) {
+        var spent: [String: Double] = [:]
+        func timed<T>(_ key: String, _ body: () -> T) -> T {
+            let start = CACurrentMediaTime()
+            defer { spent[key, default: 0] += CACurrentMediaTime() - start }
+            return body()
+        }
+        let started = CACurrentMediaTime()
         var firstByType: [String: AttributeGraphTree.Element] = [:]
-        for tree in trees { index(tree, into: &firstByType) }
+        timed("types") { for tree in trees { index(tree, into: &firstByType) } }
 
         var seen = Set<String>()
-        var instances: [String: Int] = [:]
+        // Counted by type, then by name: hashing every element's name (kilobytes for a long modifier chain) is slow.
+        var countsByType: [UnsafeRawPointer: (name: String, count: Int)] = [:]
+        var countsWithoutType: [String: Int] = [:]
         for tree in trees {
             visit(tree) { element in
-                instances[element.typeName, default: 0] += 1
+                if let id = element.typeID {
+                    countsByType[id, default: (element.typeName, 0)].count += 1
+                } else {
+                    countsWithoutType[element.typeName, default: 0] += 1
+                }
                 guard element.flags == 1, Self.isReconstructable(element.typeName) else { return }
                 guard !seen.contains(element.typeName), !element.children.isEmpty else { return }
                 seen.insert(element.typeName)
-                let chain = Self.chain(from: element)
+                let chain = timed("chains") { Self.chain(from: element) }
                 var component = Component(typeName: element.typeName, name: TypeNames.shortName(of: element.typeName), chain: chain)
-                component.anchorable = Self.anchorableIndices(chain)
-                if let last = chain.last, let layout = Self.hoistedLayout(last, firstByType: firstByType) {
+                component.anchorable = timed("anchors") { chain.indices.filter { Self.mayAnchor(chain[$0]) } }
+                if let last = chain.last, let layout = timed("layouts", { Self.hoistedLayout(last, firstByType: firstByType) }) {
                     component.hoistedLayout = layout
                 }
+                component.id = components.count
                 components.append(component)
             }
         }
+        var instances = countsWithoutType
+        for entry in countsByType.values { instances[entry.name, default: 0] += entry.count }
         for i in components.indices { components[i].instances = instances[components[i].typeName] ?? 1 }
+        spent["rest"] = CACurrentMediaTime() - started - spent.values.reduce(0, +)
+        Self.phases = spent.sorted { $0.value > $1.value }
     }
 
     /// SwiftUI views that are built as view lists too (and therefore missing from `_ViewDebug`).
@@ -122,6 +146,15 @@ struct ComponentReconstruction {
         // App views wrapped around each node so far, and nodes two unrelated views both claimed.
         var wrappers: [ObjectIdentifier: [(component: Component, node: RawDebugNode)]] = [:]
         var contested: [ObjectIdentifier: [Component]] = [:]
+        // Whether one view is built from the other reads both chains, kilobytes of type names: once per pair.
+        var nestedPairs: [Int: Bool] = [:]
+        func isNested(_ a: Component, _ b: Component) -> Bool {
+            let key = min(a.id, b.id) << 32 | max(a.id, b.id)
+            if let known = nestedPairs[key] { return known }
+            let result = Self.isNested(a, b)
+            nestedPairs[key] = result
+            return result
+        }
 
         for component in ordered {
             if let layout = component.hoistedLayout {
@@ -142,8 +175,8 @@ struct ComponentReconstruction {
                 // each. Which one this is cannot be told, so the node gets neither.
                 let id = ObjectIdentifier(root)
                 if !isSystem {
-                    if contested[id]?.contains(where: { !Self.isNested(component, $0) }) == true { continue }
-                    let rivals = wrappers[id, default: []].filter { !Self.isNested(component, $0.component) }
+                    if contested[id]?.contains(where: { !isNested(component, $0) }) == true { continue }
+                    let rivals = wrappers[id, default: []].filter { !isNested(component, $0.component) }
                     if !rivals.isEmpty {
                         rivals.forEach { unwrap($0.node) }
                         wrappers[id]?.removeAll { wrapper in rivals.contains { $0.node === wrapper.node } }
@@ -157,7 +190,7 @@ struct ComponentReconstruction {
                 if !isSystem { wrappers[id, default: []].append((component, synthetic)) }
                 count += 1
             }
-            Self.log.append("\(component.name): anchor \(AttributeGraphTree.readable(component.chain[match]).prefix(70)) → \(count)")
+            Self.log.append("\(component.name): anchor \(AttributeGraphTree.readablePrefix(component.chain[match], 70)) → \(count)")
         }
     }
 
@@ -167,26 +200,34 @@ struct ComponentReconstruction {
     /// the next anchor is tried, and with none left the view stays unnamed.
     private func placements(of component: Component, isSystem: Bool,
                             byType: [String: [RawDebugNode]]) -> (anchor: Int, roots: [RawDebugNode])? {
-        let candidates = component.anchorable.filter { byType[component.chain[$0]]?.isEmpty == false }.sorted { a, b in
-            let ca = byType[component.chain[a]]!.count, cb = byType[component.chain[b]]!.count
-            if ca != cb { return ca < cb }
-            if component.chain[a].count != component.chain[b].count { return component.chain[a].count > component.chain[b].count }
-            return a < b
+        // Most chain types are not in the tree: the wrapper check, which reads the whole (possibly huge) type, only
+        // runs for the ones that are.
+        // Node lists and name lengths are looked up once per candidate, not in every comparison of the sort.
+        let candidates = component.anchorable.compactMap { i -> (index: Int, nodes: [RawDebugNode], length: Int)? in
+            guard let nodes = byType[component.chain[i]], !nodes.isEmpty, !Self.isUninformative(component.chain[i]) else { return nil }
+            return (i, nodes, component.chain[i].count)
+        }.sorted { a, b in
+            if a.nodes.count != b.nodes.count { return a.nodes.count < b.nodes.count }
+            if a.length != b.length { return a.length > b.length }
+            return a.index < b.index
         }
         guard !candidates.isEmpty else {
             Self.log.append("\(component.name): no anchor")
             return nil
         }
         let limit = max(2 * component.instances, component.instances + 2)
-        for index in candidates {
+        for candidate in candidates {
+            let index = candidate.index
             var roots: [RawDebugNode] = []
-            for node in byType[component.chain[index]] ?? [] {
+            var found = Set<ObjectIdentifier>()
+            for node in candidate.nodes {
                 let root = climb(from: node, chain: component.chain, anchorIndex: index)
-                if Self.hasNode(ofType: component.typeName, above: root) || roots.contains(where: { $0 === root }) { continue }
+                if found.contains(ObjectIdentifier(root)) || Self.hasNode(ofType: component.typeName, above: root) { continue }
+                found.insert(ObjectIdentifier(root))
                 roots.append(root)
             }
             if isSystem || roots.count <= limit { return (index, roots) }
-            Self.log.append("\(component.name): anchor \(AttributeGraphTree.readable(component.chain[index]).prefix(70)) "
+            Self.log.append("\(component.name): anchor \(AttributeGraphTree.readablePrefix(component.chain[index], 70)) "
                             + "ambiguous, \(roots.count) nodes for \(component.instances)")
         }
         return nil
@@ -195,22 +236,152 @@ struct ComponentReconstruction {
     /// Chain types that can anchor a component. Plain `Text`, `_PaddingLayout`, `Spacer`… say nothing about
     /// *which* view this is, nor do the wrappers that show up everywhere.
     private static func anchorableIndices(_ chain: [String]) -> [Int] {
-        chain.indices.filter { i in
-            let type = chain[i]
-            if isUninformative(type) { return false }
-            return type.contains("<") || TypeNames.isAppType(type)
-        }
+        chain.indices.filter { mayAnchor(chain[$0]) && !isUninformative(chain[$0]) }
+    }
+
+    /// A generic or app type: the cheap half of being an anchor, read from the start of the name.
+    private static func mayAnchor(_ type: String) -> Bool {
+        type.contains("<") || TypeNames.isAppType(type)
     }
 
     /// A wrapper that shows up everywhere, or one built only of them:
     /// `ModifiedContent<PlaceholderContentView<OpacityTransition>, OpacityRendererEffect>` is in every view with an
     /// opacity transition.
+    ///
+    /// The type is read in one pass (`TypeShape`). Splitting it into generic arguments level by level, as
+    /// `TypeNames.genericArguments` does, rescans the string at every level: a view with a long modifier chain is
+    /// `ModifiedContent<ModifiedContent<…>, …>` hundreds of levels deep and tens of kilobytes long, and a large app's
+    /// screen took seconds.
     static func isUninformative(_ type: String) -> Bool {
+        if let cached = uninformative[type] { return cached }
+        let result = TypeShape(type).map { $0.isUninformative($0.whole) } ?? isUninformativeSlow(type)
+        uninformative[type] = result
+        return result
+    }
+
+    /// Chain types repeat across components and captures (a view's chain includes the chains of the views it is
+    /// built from).
+    private static var uninformative: [String: Bool] = [:]
+
+    static func resetTypeCache() { uninformative = [:] }
+
+    /// Chain types for which the one-pass reading and the straightforward one disagree (diagnostics; slow).
+    func typeShapeMismatches() -> (checked: Int, mismatches: [String]) {
+        var seen = Set<String>()
+        var mismatches: [String] = []
+        for component in components {
+            for type in component.chain where seen.insert(type).inserted {
+                if isUninformativeFast(type) != Self.isUninformativeSlow(type) { mismatches.append(type) }
+            }
+        }
+        return (seen.count, mismatches)
+    }
+
+    private func isUninformativeFast(_ type: String) -> Bool { Self.isUninformative(type) }
+
+    /// The same, the straightforward way: for types `TypeShape` does not take (`->` in a function type).
+    static func isUninformativeSlow(_ type: String) -> Bool {
         let base = TypeNames.base(of: TypeNames.shortName(of: type))
         if genericBases.contains(base) { return true }
         guard base == "ModifiedContent" || base == "_ConditionalContent" else { return false }
         let arguments = TypeNames.genericArguments(of: type)
-        return !arguments.isEmpty && arguments.allSatisfy(isUninformative)
+        return !arguments.isEmpty && arguments.allSatisfy(isUninformativeSlow)
+    }
+
+    /// A type name with its brackets matched once, so that every nested generic argument is found without scanning
+    /// the string again. Reads ranges exactly the way `TypeNames.shortName`, `base` and `genericArguments` read
+    /// strings. `nil` for names whose brackets do not pair up (a function type's `->`), which those read differently.
+    struct TypeShape {
+        let bytes: [UInt8]
+        /// For every `<`, `(`, `{`, `[`: the position of its closing bracket (-1 elsewhere).
+        private var close: [Int32]
+        /// The first `<` at or after each position.
+        private var nextOpenAngle: [Int32]
+
+        var whole: Range<Int> { 0..<bytes.count }
+
+        init?(_ type: String) {
+            bytes = Array(type.utf8)
+            if zip(bytes, bytes.dropFirst()).contains(where: { $0 == UInt8(ascii: "-") && $1 == UInt8(ascii: ">") }) { return nil }
+            close = Array(repeating: -1, count: bytes.count)
+            nextOpenAngle = Array(repeating: Int32(bytes.count), count: bytes.count + 1)
+            var stack: [Int] = []
+            for (i, byte) in bytes.enumerated() {
+                switch byte {
+                case UInt8(ascii: "<"), UInt8(ascii: "("), UInt8(ascii: "{"), UInt8(ascii: "["): stack.append(i)
+                case UInt8(ascii: ">"), UInt8(ascii: ")"), UInt8(ascii: "}"), UInt8(ascii: "]"):
+                    guard let open = stack.popLast() else { return nil }
+                    close[open] = Int32(i)
+                default: break
+                }
+            }
+            guard stack.isEmpty else { return nil }
+            for i in stride(from: bytes.count - 1, through: 0, by: -1) {
+                nextOpenAngle[i] = bytes[i] == UInt8(ascii: "<") ? Int32(i) : nextOpenAngle[i + 1]
+            }
+        }
+
+        func isUninformative(_ range: Range<Int>) -> Bool {
+            let next = Int(nextOpenAngle[range.lowerBound])
+            let open = next < range.upperBound ? next : nil
+            let base = shortName(range.lowerBound..<(open ?? range.upperBound))
+            if genericBases.contains(base) { return true }
+            guard base == "ModifiedContent" || base == "_ConditionalContent" else { return false }
+            guard let arguments = genericArguments(range, open: open) else {
+                return ComponentReconstruction.isUninformativeSlow(String(decoding: bytes[range], as: UTF8.self))
+            }
+            return !arguments.isEmpty && arguments.allSatisfy(isUninformative)
+        }
+
+        /// `TypeNames.shortName` of a name without generic arguments: after the last `).`, else after the last `.`.
+        private func shortName(_ range: Range<Int>) -> String {
+            var start = range.lowerBound
+            var i = range.upperBound - 1
+            var lastDot: Int?
+            while i > range.lowerBound {
+                if bytes[i] == UInt8(ascii: "."), bytes[i - 1] == UInt8(ascii: ")") { start = i + 1; lastDot = nil; break }
+                if bytes[i] == UInt8(ascii: "."), lastDot == nil { lastDot = i }
+                i -= 1
+            }
+            if start == range.lowerBound {
+                if let lastDot { start = lastDot + 1 }
+                else if range.upperBound > range.lowerBound, bytes[range.lowerBound] == UInt8(ascii: ".") { start = range.lowerBound + 1 }
+            }
+            return String(decoding: bytes[start..<range.upperBound], as: UTF8.self)
+        }
+
+        /// `TypeNames.genericArguments`: the arguments between the first `<` and a closing `>` that ends the range,
+        /// split at the commas directly inside, trimmed; the last one only when not empty. `nil` when that `<` does
+        /// not close at the end of the range, which only the slow way reads like `genericArguments` does.
+        private func genericArguments(_ range: Range<Int>, open: Int?) -> [Range<Int>]? {
+            guard let open, bytes[range.upperBound - 1] == UInt8(ascii: ">") else { return [] }
+            guard Int(close[open]) == range.upperBound - 1 else { return nil }
+            // The commas directly inside: nested brackets are jumped over, so every level reads only its own text.
+            var result: [Range<Int>] = []
+            var start = open + 1
+            var i = start
+            let end = range.upperBound - 1
+            while i < end {
+                if close[i] >= 0 {
+                    i = Int(close[i]) + 1
+                } else {
+                    if bytes[i] == UInt8(ascii: ",") {
+                        result.append(trimmed(start..<i))
+                        start = i + 1
+                    }
+                    i += 1
+                }
+            }
+            if start < end { result.append(trimmed(start..<end)) }
+            return result
+        }
+
+        private func trimmed(_ range: Range<Int>) -> Range<Int> {
+            var lower = range.lowerBound, upper = range.upperBound
+            while lower < upper, bytes[lower] == UInt8(ascii: " ") || bytes[lower] == UInt8(ascii: "\t") { lower += 1 }
+            while upper > lower, bytes[upper - 1] == UInt8(ascii: " ") || bytes[upper - 1] == UInt8(ascii: "\t") { upper -= 1 }
+            return lower..<upper
+        }
     }
 
     /// One of the two views is built from the other (`ChatTabItem`'s body is a `HolaTabItem`).

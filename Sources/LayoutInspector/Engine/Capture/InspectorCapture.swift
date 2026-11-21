@@ -359,6 +359,7 @@ enum LayoutCapture {
             lastTimings = ["total \(Int(duration * 1000)) ms"]
                 + timings.sorted { $0.value > $1.value }.map { "\($0.key) \(Int($0.value * 1000)) ms" }
                 + ViewDebugReader.encodingSummary
+                + (timings["reconstructIndex"] == nil ? [] : ComponentReconstruction.phases.map { "index.\($0.0) \(Int($0.1 * 1000)) ms" })
                 + ["hosts \(hosts.count), re-captured \(fresh.count)",
                    "longest step \(Int(max(longest, CACurrentMediaTime() - finalStart) * 1000)) ms"]
         }
@@ -383,11 +384,15 @@ enum LayoutCapture {
     private static var idCounter = 0
     /// Kept with its trees, which also keeps them alive for the identity check.
     private static var lastReconstruction: (trees: [AttributeGraphTree.Element], index: ComponentReconstruction)?
+    static var lastReconstructionIndex: ComponentReconstruction? { lastReconstruction?.index }
 
     /// Reuse trees of hosting views whose render tree did not change since the previous capture.
     static var useCache = true
 
-    static func resetCache() { cache = [:]; agCache = [:]; lastReconstruction = nil }
+    static func resetCache() {
+        cache = [:]; agCache = [:]; lastReconstruction = nil
+        ComponentReconstruction.resetTypeCache()
+    }
 
     /// Where the time of the last capture went (diagnostics).
     private(set) static var lastTimings: [String] = []

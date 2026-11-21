@@ -8,11 +8,14 @@ internal import LayoutInspectorAttributeGraph
 enum AttributeGraphTree {
     final class Element {
         let typeName: String
+        /// The type's metadata, to count elements of a type without hashing its (long) name; `nil` with no type.
+        let typeID: UnsafeRawPointer?
         let flags: UInt32
         let children: [Element]
 
-        init(typeName: String, flags: UInt32, children: [Element]) {
+        init(typeName: String, typeID: UnsafeRawPointer? = nil, flags: UInt32, children: [Element]) {
             self.typeName = typeName
+            self.typeID = typeID
             self.flags = flags
             self.children = children
         }
@@ -62,7 +65,8 @@ enum AttributeGraphTree {
 
     private static func element(_ e: LIAGTreeElement, depth: Int) -> Element {
         var name = "?"
-        if let meta = LIAGTreeElementGetType(e) {
+        let meta = LIAGTreeElementGetType(e)
+        if let meta {
             name = TypeNames.qualifiedName(of: unsafeBitCast(meta, to: Any.Type.self))
         }
         var children: [Element] = []
@@ -72,7 +76,7 @@ enum AttributeGraphTree {
             children.reserveCapacity(elements.count)
             for c in elements { children.append(element(c, depth: depth + 1)) }
         }
-        return Element(typeName: name, flags: LIAGTreeElementGetFlags(e), children: children)
+        return Element(typeName: name, typeID: meta, flags: LIAGTreeElementGetFlags(e), children: children)
     }
 
     /// Mirror lookup through optionals and superclasses.
@@ -89,6 +93,16 @@ enum AttributeGraphTree {
         let m = Mirror(reflecting: value)
         guard m.displayStyle == .optional else { return value }
         return m.children.first.map { unwrap($0.value) } ?? nil
+    }
+
+    /// The first `length` characters of `readable(full)`, from the start of the name only: names of long modifier
+    /// chains run to kilobytes, and the log needs their beginning.
+    static func readablePrefix(_ full: String, _ length: Int) -> Substring {
+        let head = full.utf8.count > 1024 ? String(full.prefix(1024)) : full
+        let short = readable(head)
+        // A module prefix cut at the end of `head` may read differently; far enough from the end it doesn't matter.
+        if head.count == full.count || short.count >= length + 256 { return short.prefix(length) }
+        return readable(full).prefix(length)
     }
 
     /// "SwiftUI.ModifiedContent<InspectorDemo.ProfileHeader, …>" -> "ModifiedContent<ProfileHeader, …>"

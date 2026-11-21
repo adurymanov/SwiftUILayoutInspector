@@ -25,7 +25,13 @@ enum CaptureDump {
         counter += 1
         let url = URL(fileURLWithPath: dir).appendingPathComponent(String(format: "capture-%03d.txt", counter))
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        let header = (["# timings"] + LayoutCapture.lastTimings + ["# reconstruction"] + LayoutCapture.lastReconstructionLog)
+        var checks: [String] = []
+        if ProcessInfo.processInfo.environment["LAYOUT_INSPECTOR_CHECK_TYPES"] != nil, let index = LayoutCapture.lastReconstructionIndex {
+            let result = index.typeShapeMismatches()
+            checks = ["# type shapes: \(result.checked) checked, \(result.mismatches.count) differ"]
+                + result.mismatches.map { "differs: " + $0.prefix(300) }
+        }
+        let header = (["# timings"] + LayoutCapture.lastTimings + checks + ["# reconstruction"] + LayoutCapture.lastReconstructionLog)
             .joined(separator: "\n")
         try? (header + "\n" + text(for: capture)).write(to: url, atomically: true, encoding: .utf8)
     }
