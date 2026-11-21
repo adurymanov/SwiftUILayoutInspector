@@ -35,7 +35,7 @@ and the data comes from the SwiftUI runtime — the same debug graph Xcode's vie
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.3"),
+.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.4"),
 
 .target(name: "App", dependencies: [
     .product(name: "LayoutInspector", package: "SwiftUILayoutInspector"),
@@ -177,7 +177,7 @@ computed while navigating; the button shows the capture's progress.
   API:
 
   ```swift
-  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.3", traits: []),
+  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.4", traits: []),
   ```
 
   Package traits apply to every build configuration. To keep the inspector in Debug and drop it from Release,
@@ -195,7 +195,8 @@ While a sheet or an alert without an inspector covers the inspected view, the in
 
 Without touching any view — from a debug menu or a shake gesture. The inspector follows the window in front
 (the one that takes a touch in the middle of the screen), so a debug menu, sheet or popup an app shows in a
-window of its own is inspected too:
+window of its own is inspected too. What a full-screen cover or an opaque sheet hides in the same window is not
+marked:
 
 ```swift
 LayoutInspector.show(.init(mode: .components))
@@ -290,7 +291,9 @@ fixtures as their previews.
    destinations, list cells) records its view tree with values: padding insets, frame constraints,
    stack spacing and alignment, resolved text attributes, positions and sizes. The inspector reads it
    through `_viewDebugData()` (the data behind Xcode's `makeViewDebugData`) without SwiftUI's JSON: it has
-   SwiftUI encode only the values it uses, and turns the tree into a compact semantic tree.
+   SwiftUI encode only the values it uses, and turns the tree into a compact semantic tree. Positions are
+   followed through `.offset`, scale and rotation effects, geometry and drawing groups, Liquid Glass and an app's
+   own `GeometryEffect`, so markup lands where the element is drawn.
 2. **AttributeGraph.** The debug graph drops app-defined views that SwiftUI builds as view lists (most views
    inside stacks) and custom `Layout`s. They are restored from AttributeGraph's tree elements by matching
    the chain of types their `body` resolves to.

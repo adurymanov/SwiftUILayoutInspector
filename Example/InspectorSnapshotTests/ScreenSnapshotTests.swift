@@ -90,10 +90,11 @@ final class ScreenSnapshotTests: XCTestCase {
         let capture = try await harness.waitUntilLoaded()
         XCTAssertTrue(capture.isSwiftUIGraphAvailable, "SWIFTUI_VIEW_DEBUG is not enabled")
 
-        // ScrollView padding 16 + card padding 20, and `.offset(x: 8)` on the last two.
+        // ScrollView padding 16 + card padding 20, and `.offset(x: 8)` on the last two. A card scaled by 0.95 around
+        // its center is 18.5 pt narrower and its padding 19: its title starts at 16 + 9.25 + 19.
         let titles: [(String, CGFloat)] = [
-            ("$0.00", 36), ("Drawing group", 36), ("Scaled", 36), ("Rotated", 36), ("Visual effect", 36),
-            ("Custom effect", 36), ("Compositing group", 36), ("Moved", 44), ("Scaled and moved", 44),
+            ("$0.00", 36), ("Drawing group", 36), ("Scaled", 44.25), ("Rotated", 36), ("Visual effect", 36),
+            ("Custom effect", 36), ("Compositing group", 36), ("Moved", 44), ("Scaled and moved", 52.25),
         ]
         var previous: CGRect?
         for (title, x) in titles {

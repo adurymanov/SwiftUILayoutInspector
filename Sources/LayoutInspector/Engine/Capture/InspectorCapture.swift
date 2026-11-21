@@ -17,6 +17,8 @@ public final class InspectorCapture {
     public let duration: TimeInterval
     public let date = Date()
     private(set) var issues: [LintIssue] = []
+    /// What the presentations on screen hide (see `Occlusion`); `nil` when nothing opaque is presented.
+    var occlusion: Occlusion?
 
     init(swiftUIRoots: [InspectorNode], uikitRoot: InspectorNode, isSwiftUIGraphAvailable: Bool, duration: TimeInterval) {
         self.swiftUIRoots = swiftUIRoots
@@ -39,14 +41,41 @@ public final class InspectorCapture {
         return all
     }
 
-    /// Re-resolves every anchor into `space` (cheap – call on scroll / every frame).
+    /// Re-resolves every anchor into `space` (cheap – call on scroll / every frame). A SwiftUI node hidden by a
+    /// presentation above its screen (a full-screen cover, an opaque sheet) gets a null frame, like one off screen.
     public func resolveFrames(in space: UIView) {
         func resolve(_ n: InspectorNode) {
             n.frame = n.anchor.resolve(in: space) ?? .null
             n.children.forEach(resolve)
         }
-        swiftUIRoots.forEach(resolve)
-        resolve(uikitRoot)
+        guard let occlusion else {
+            swiftUIRoots.forEach(resolve)
+            resolve(uikitRoot)
+            return
+        }
+        // A SwiftUI node is hidden when what its host shows of it is covered; a host covered whole hides its tree.
+        func resolveBelow(_ n: InspectorNode, visible: CGRect, covers: [CGRect]) {
+            let frame = n.anchor.resolve(in: space) ?? .null
+            n.frame = frame.isNull || Occlusion.isHidden(frame, visible: visible, by: covers) ? .null : frame
+            n.children.forEach { resolveBelow($0, visible: visible, covers: covers) }
+        }
+        for root in swiftUIRoots {
+            guard let host = root.anchor.view, let hostFrame = root.anchor.resolve(in: space) else { resolve(root); continue }
+            resolveBelow(root, visible: hostFrame.intersection(space.bounds), covers: occlusion.covers(of: host, in: space))
+        }
+        // UIKit views (labels, stack views of the screen below) by the presentation each one is in.
+        var coversByView: [ObjectIdentifier: [CGRect]] = [:]
+        func resolveUIKit(_ n: InspectorNode) {
+            var frame = n.anchor.resolve(in: space) ?? .null
+            if !frame.isNull, let view = n.anchor.view {
+                let covers = coversByView[ObjectIdentifier(view)] ?? occlusion.covers(of: view, in: space)
+                coversByView[ObjectIdentifier(view)] = covers
+                if Occlusion.isHidden(frame, visible: space.bounds, by: covers) { frame = .null }
+            }
+            n.frame = frame
+            n.children.forEach(resolveUIKit)
+        }
+        resolveUIKit(uikitRoot)
     }
 
     func runLint(rules: LayoutInspector.LintRules, bounds: CGRect) {
@@ -323,8 +352,10 @@ enum LayoutCapture {
             let uikit = measure("uikit") { UIKitCapture.capture(root: root, excluding: excluding, nextID: nextID) }
             // Time spent capturing, without the frames between steps.
             let duration = busy + CACurrentMediaTime() - finalStart
-            output.capture = InspectorCapture(swiftUIRoots: roots, uikitRoot: uikit, isSwiftUIGraphAvailable: graphAvailable,
-                                              duration: duration)
+            let capture = InspectorCapture(swiftUIRoots: roots, uikitRoot: uikit, isSwiftUIGraphAvailable: graphAvailable,
+                                           duration: duration)
+            capture.occlusion = Occlusion(root: root)
+            output.capture = capture
             lastTimings = ["total \(Int(duration * 1000)) ms"]
                 + timings.sorted { $0.value > $1.value }.map { "\($0.key) \(Int($0.value * 1000)) ms" }
                 + ViewDebugReader.encodingSummary

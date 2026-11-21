@@ -166,14 +166,17 @@ struct InspectorRenderer {
         for node in visible where node.kind == .padding {
             guard let padding = node.info.padding, let inner = padding.inner?.resolve(in: space) else { continue }
             let outer = node.frame
-            let m = padding.measured
-            guard !m.isZero else { continue }
+            guard !padding.measured.isZero else { continue }
             let alpha: CGFloat = padding.isSystem ? 0.18 : 0.35
+            // The bands as they are on screen. The measured insets are in the content's own units: under a scale
+            // they are larger than the bands, and a top padding turned upside down is at the bottom.
+            let top = inner.minY - outer.minY, bottom = outer.maxY - inner.maxY
+            let leading = inner.minX - outer.minX, trailing = outer.maxX - inner.maxX
             let regions: [(CGRect, CGFloat)] = [
-                (CGRect(x: outer.minX, y: outer.minY, width: outer.width, height: inner.minY - outer.minY), m.top),
-                (CGRect(x: outer.minX, y: inner.maxY, width: outer.width, height: outer.maxY - inner.maxY), m.bottom),
-                (CGRect(x: outer.minX, y: inner.minY, width: inner.minX - outer.minX, height: inner.height), m.leading),
-                (CGRect(x: inner.maxX, y: inner.minY, width: outer.maxX - inner.maxX, height: inner.height), m.trailing),
+                (CGRect(x: outer.minX, y: outer.minY, width: outer.width, height: top), top),
+                (CGRect(x: outer.minX, y: inner.maxY, width: outer.width, height: bottom), bottom),
+                (CGRect(x: outer.minX, y: inner.minY, width: leading, height: inner.height), leading),
+                (CGRect(x: inner.maxX, y: inner.minY, width: trailing, height: inner.height), trailing),
             ]
             for (rect, value) in regions where value > 0.25 && rect.width > 0 && rect.height > 0 {
                 fill(ctx, rect, Palette.padding.withAlphaComponent(alpha))

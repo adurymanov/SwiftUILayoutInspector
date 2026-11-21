@@ -61,12 +61,15 @@ enum SwiftUIGraphReader {
         return ran
     }
 
-    /// Drops subtrees that are not on screen: cells kept for reuse by lazy stacks, fully transparent views.
+    /// Drops subtrees that are not on screen: cells kept for reuse by lazy stacks, fully transparent views, the
+    /// hidden copies made for accessibility.
     static func pruneHidden(_ node: RawDebugNode) {
         node.children.removeAll { child in
             switch child.base {
             case "HiddenForReuseEffect": return child.value?["isHiddenForReuse"]?.bool == true
             case "OpacityRendererEffect", "_OpacityEffect": return (child.value?["opacity"]?.number ?? 1) < 0.01
+            // What `.accessibilityRepresentation { … }` gives VoiceOver: laid out on its own, never drawn.
+            case "HiddenModifierAllowingAccessibility": return true
             default: return false
             }
         }
@@ -140,18 +143,31 @@ final class SwiftUITreeBuilder {
 
     private struct Context {
         var space: UIView
-        var offset: CGPoint = .zero
+        /// From the coordinates `_ViewDebug` measures in here to `space`: a translation, and the scale or rotation of
+        /// the effects above (see `opensCoordinateSpace`).
+        var transform: CGAffineTransform = .identity
+        /// The box of the nearest view with geometry, in the coordinates of `transform`. A view without geometry of
+        /// its own (a `Text` under `.offset`, a component, a glass) takes it.
+        var local: CGRect
+        /// `local` in `space`.
         var rect: CGRect
         var parentReadable: String = ""
         var insideControl: Bool = false
         var controlBase: String?
         var decorations: [String] = []
         weak var parent: InspectorNode?
-        /// The offset `rect` was measured with.
-        var rectOffset: CGPoint = .zero
-        /// `.offset` translations since the last view with its own geometry. Positions below an `.offset` already
-        /// include it, so only views without geometry of their own (a glass, a component) are moved by it.
-        var moved: CGSize = .zero
+
+        init(space: UIView, rect: CGRect, parent: InspectorNode?) {
+            self.space = space
+            self.local = rect
+            self.rect = rect
+            self.parent = parent
+        }
+
+        mutating func place(_ box: CGRect) {
+            local = box
+            rect = box.applying(transform)
+        }
     }
 
     /// Modifiers after which `_ViewDebug` measures positions from the modifier itself (iOS 18, 26 and 27 alike):
@@ -170,17 +186,54 @@ final class SwiftUITreeBuilder {
 
     /// Positions below `raw` are measured from `raw`. For the modifiers that do it only sometimes, and for an app's
     /// own `GeometryEffect`, the geometry tells: the first measured view below lies inside `raw` only when its
-    /// position is taken from `raw`'s corner.
-    static func opensCoordinateSpace(_ raw: RawDebugNode) -> Bool {
+    /// position is taken from `raw`'s corner. `box` is where `raw` is when it has no geometry of its own: an app's
+    /// `GeometryEffect` right under a transition wrapper (a banking app's passcode dots) takes the box from above.
+    static func opensCoordinateSpace(_ raw: RawDebugNode, box: CGRect) -> Bool {
         guard !raw.isSynthetic else { return false }
         let isApp = TypeNames.isAppType(raw.typeName)
         let name = TypeNames.shortName(of: raw.typeName)
         if !isApp, coordinateSpaceModifiers.contains(name) { return true }
-        guard isApp || contentDependentSpaceModifiers.contains(name), let outer = raw.geometry, outer.origin != .zero,
-              let inner = raw.children.lazy.compactMap({ $0.firstGeometry }).first else { return false }
+        let isGeometryEffect = raw.swiftValue is any GeometryEffect
+        guard isApp || contentDependentSpaceModifiers.contains(name),
+              let outer = raw.geometry ?? (isGeometryEffect ? box : nil) else { return false }
+        // At the origin of the space the corner is the same either way; open it so the effect's transform applies.
+        if outer.origin == .zero { return isGeometryEffect }
+        guard let inner = raw.children.lazy.compactMap({ $0.firstGeometry }).first else { return false }
         // Even with a translation (`visualEffect { $0.offset(x: 10) }`) the content is reported at the corner.
         return !outer.insetBy(dx: -1, dy: -1).contains(inner)
             && CGRect(origin: .zero, size: outer.size).insetBy(dx: -1, dy: -1).contains(inner)
+    }
+
+    /// What a modifier that opens a coordinate space does to its content, in the modifier's own coordinates. For the
+    /// ones that are not a `GeometryEffect` (glass, `.visualEffect`) only where the content starts is known.
+    static func effectTransform(of raw: RawDebugNode, size: CGSize) -> CGAffineTransform {
+        func around(_ anchor: UnitPoint, _ transform: CGAffineTransform) -> CGAffineTransform {
+            let a = CGPoint(x: anchor.x * size.width, y: anchor.y * size.height)
+            return CGAffineTransform(translationX: -a.x, y: -a.y).concatenating(transform)
+                .concatenating(CGAffineTransform(translationX: a.x, y: a.y))
+        }
+        if let value = raw.swiftValue {
+            // A `GeometryEffect` says what it does (`scaleEffect`, `rotationEffect`, `transformEffect` and an app's own
+            // effect alike: a banking app's passcode dots move theirs by half a dot). A perspective one
+            // (`rotation3DEffect`, `projectionEffect`) is left out: a box cannot follow it.
+            guard let effect = value as? any GeometryEffect else { return .identity }
+            let p = effect.effectValue(size: size)
+            guard abs(p.m13) < 1e-9, abs(p.m23) < 1e-9, abs(p.m33 - 1) < 1e-9 else { return .identity }
+            return CGAffineTransform(a: p.m11, b: p.m12, c: p.m21, d: p.m22, tx: p.m31, ty: p.m32)
+        }
+        // Read through SwiftUI's own encoding (data of a layout this reader does not know).
+        let value = raw.value
+        let anchor = UnitPoint(x: value?.at("anchor", "x")?.number ?? 0.5, y: value?.at("anchor", "y")?.number ?? 0.5)
+        switch TypeNames.shortName(of: raw.typeName) {
+        case "_ScaleEffect":
+            guard let scale = value?["scale"]?.size else { return .identity }
+            return around(anchor, CGAffineTransform(scaleX: scale.width, y: scale.height))
+        case "_RotationEffect":
+            guard let radians = value?.at("angle", "radians")?.number else { return .identity }
+            return around(anchor, CGAffineTransform(rotationAngle: radians))
+        default:
+            return .identity
+        }
     }
 
     private static func isSwiftUI(_ raw: RawDebugNode, _ name: String) -> Bool {
@@ -205,31 +258,23 @@ final class SwiftUITreeBuilder {
 
     private func visit(_ raw: RawDebugNode, _ incoming: Context) {
         var ctx = incoming
-        if let g = raw.geometry {
-            ctx.rect = g.offsetBy(dx: ctx.offset.x, dy: ctx.offset.y)
-            ctx.rectOffset = ctx.offset
-            ctx.moved = .zero
-        }
-        // Positions below `.glassEffect`, `.geometryGroup()` and the like are measured from the modifier (see
-        // `opensCoordinateSpace`). The content of a `GlassEffectContainer` stays in the space around it; its storage
-        // (SwiftUI drawing the glass) is measured from the container and left out. Under `.offset` the glass has
-        // no geometry: it sits where its parent was measured, moved by the offset (`moved`), and so does a
-        // component whose body starts with it.
+        if let g = raw.geometry { ctx.place(g) }
+        // Positions below `.glassEffect`, `.geometryGroup()`, the transform effects and the like are measured from
+        // the modifier (see `opensCoordinateSpace`), before its scale or rotation. The content of a
+        // `GlassEffectContainer` stays in the space around it; its storage (SwiftUI drawing the glass) is measured
+        // from the container and left out. Under `.offset` the glass has no geometry: it takes the box of its parent
+        // moved by the offset, and so does a component whose body starts with it.
         if Self.isSwiftUI(raw, "ContainerStorageView") { return }
-        let opensSpace = Self.opensCoordinateSpace(raw)
-        if opensSpace || raw.isSynthetic {
-            ctx.rect.origin.x += ctx.offset.x - ctx.rectOffset.x + ctx.moved.width
-            ctx.rect.origin.y += ctx.offset.y - ctx.rectOffset.y + ctx.moved.height
-            ctx.rectOffset = ctx.offset
-            ctx.moved = .zero
-        }
+        let opensSpace = Self.opensCoordinateSpace(raw, box: ctx.local)
 
         let classification = classify(raw, ctx)
         var childCtx = ctx
         childCtx.parentReadable = raw.readable
         if opensSpace {
-            childCtx.offset = ctx.rect.origin
-            childCtx.rectOffset = ctx.rect.origin
+            childCtx.transform = Self.effectTransform(of: raw, size: ctx.local.size)
+                .concatenating(CGAffineTransform(translationX: ctx.local.minX, y: ctx.local.minY))
+                .concatenating(ctx.transform)
+            childCtx.place(CGRect(origin: .zero, size: ctx.local.size))
         }
 
         switch classification {
@@ -240,8 +285,9 @@ final class SwiftUITreeBuilder {
             childCtx.decorations.append(text)
 
         case let .offset(size):
-            childCtx.moved.width += size.width
-            childCtx.moved.height += size.height
+            // Positions below `.offset` already include it (iOS 18, 26 and 27): only the views without geometry of
+            // their own, which take the box measured above it, are moved here.
+            childCtx.place(ctx.local.offsetBy(dx: size.width, dy: size.height))
             let node = makeNode(raw, ctx, kind: .offset, title: ".offset",
                                 detail: "x \(size.width.pt) y \(size.height.pt)")
             node.info.offset = size
@@ -251,10 +297,8 @@ final class SwiftUITreeBuilder {
         case .enterScroll:
             if let scroll = matchScrollView(for: ctx) {
                 childCtx.space = scroll
-                childCtx.offset = .zero
-                childCtx.rectOffset = .zero
-                childCtx.moved = .zero
-                childCtx.rect = CGRect(origin: .zero, size: scroll.contentSize)
+                childCtx.transform = .identity
+                childCtx.place(CGRect(origin: .zero, size: scroll.contentSize))
             }
 
         case .passThrough:
@@ -269,15 +313,15 @@ final class SwiftUITreeBuilder {
             childCtx.decorations = []
             childCtx.parent = node
             if isControl { childCtx.insideControl = true; childCtx.controlBase = title }
-            if kind == .padding {
-                node.info.padding?.inner = innerAnchor(below: raw, ctx)
-                if let inner = node.info.padding?.inner {
-                    let outer = node.anchor.rect
-                    node.info.padding?.measured = EdgeValues(
-                        top: inner.rect.minY - outer.minY, leading: inner.rect.minX - outer.minX,
-                        bottom: outer.maxY - inner.rect.maxY, trailing: outer.maxX - inner.rect.maxX
-                    )
-                }
+            if kind == .padding, let inner = innerBox(below: raw) {
+                node.info.padding?.inner = NodeAnchor(view: ctx.space, rect: inner.applying(ctx.transform))
+                // In the content's own units, like the declared insets: under a scale or a rotation the bands on
+                // screen differ (the renderer draws them from the frames).
+                let outer = ctx.local
+                node.info.padding?.measured = EdgeValues(
+                    top: inner.minY - outer.minY, leading: inner.minX - outer.minX,
+                    bottom: outer.maxY - inner.maxY, trailing: outer.maxX - inner.maxX
+                )
             }
             if !descend { return }
         }
@@ -314,21 +358,17 @@ final class SwiftUITreeBuilder {
         }
     }
 
-    /// The first descendant that has its own geometry = the content box inside a padding.
-    private func innerAnchor(below raw: RawDebugNode, _ ctx: Context) -> NodeAnchor? {
+    /// The first descendant that has its own geometry = the content box inside a padding, in the coordinates the
+    /// padding is measured in.
+    private func innerBox(below raw: RawDebugNode) -> CGRect? {
         var current = raw
         while current.children.count == 1 {
             current = current.children[0]
-            if let g = current.geometry {
-                return NodeAnchor(view: ctx.space, rect: g.offsetBy(dx: ctx.offset.x, dy: ctx.offset.y))
-            }
+            if let g = current.geometry { return g }
         }
         // Multiple children (e.g. background + content): the content is the largest box.
         let boxes = current.children.compactMap { firstGeometry(in: $0) }
-        if let best = boxes.max(by: { $0.width * $0.height < $1.width * $1.height }) {
-            return NodeAnchor(view: ctx.space, rect: best.offsetBy(dx: ctx.offset.x, dy: ctx.offset.y))
-        }
-        return nil
+        return boxes.max(by: { $0.width * $0.height < $1.width * $1.height })
     }
 
     private func firstGeometry(in raw: RawDebugNode) -> CGRect? {

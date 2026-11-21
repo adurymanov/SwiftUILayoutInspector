@@ -11,6 +11,15 @@ final class TagPlacer {
 
     private var placed: [CGRect] = []
     private let bounds: CGRect
+    /// Labels already placed, by text and the box or point they belong to. iOS 26+ tab bars host every item twice
+    /// (the copy under the selection lens and the plain one) at the same place: one label is enough, a second one
+    /// would only be pushed away from its box.
+    private var labelled: [(text: String, anchor: CGRect)] = []
+
+    private func isLabelled(_ text: String, _ anchor: CGRect) -> Bool {
+        labelled.contains { $0.text == text && abs($0.anchor.minX - anchor.minX) < 0.5 && abs($0.anchor.minY - anchor.minY) < 0.5
+            && abs($0.anchor.width - anchor.width) < 0.5 && abs($0.anchor.height - anchor.height) < 0.5 }
+    }
 
     init(bounds: CGRect) { self.bounds = bounds }
 
@@ -25,6 +34,7 @@ final class TagPlacer {
     func place(_ text: String, near rect: CGRect, color: UIColor, ctx: CGContext, small: Bool = false,
                swatch: UIColor? = nil, placements: [Placement] = [.aboveLeft, .insideTopLeft, .belowLeft],
                force: Bool = false) -> CGRect? {
+        if isLabelled(text, rect) { return nil }
         let (string, base) = metrics(text, small: small)
         let size = CGSize(width: base.width + (swatch == nil ? 0 : base.height), height: base.height)
         var candidates: [CGRect] = placements.map { frame(for: $0, rect: rect, size: size) }
@@ -35,6 +45,7 @@ final class TagPlacer {
             if placed.contains(where: { $0.intersects(r.insetBy(dx: 1, dy: 0.5)) }) && !(force && isLast) { continue }
             draw(string, in: r, color: color, swatch: swatch, ctx: ctx)
             placed.append(r)
+            labelled.append((text, rect))
             return r
         }
         return nil
@@ -42,11 +53,14 @@ final class TagPlacer {
 
     @discardableResult
     func place(_ text: String, center: CGPoint, color: UIColor, ctx: CGContext, small: Bool = true, force: Bool = false) -> CGRect? {
+        let point = CGRect(origin: center, size: .zero)
+        if isLabelled(text, point) { return nil }
         let (string, size) = metrics(text, small: small)
         let r = clamp(CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2, width: size.width, height: size.height))
         if !force, placed.contains(where: { $0.intersects(r) }) { return nil }
         draw(string, in: r, color: color, swatch: nil, ctx: ctx)
         placed.append(r)
+        labelled.append((text, point))
         return r
     }
 

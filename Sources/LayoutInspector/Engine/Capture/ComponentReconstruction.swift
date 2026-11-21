@@ -19,6 +19,8 @@ struct ComponentReconstruction {
         var hoistedLayout: (name: String, typeName: String, itemChains: [[String]])?
         /// Indices of `chain` specific enough to anchor on (see `anchor(in:byType:)`), worked out once.
         var anchorable: [Int] = []
+        /// How many of it AttributeGraph holds, in every host.
+        var instances = 1
     }
 
     private(set) var components: [Component] = []
@@ -30,10 +32,12 @@ struct ComponentReconstruction {
         for tree in trees { index(tree, into: &firstByType) }
 
         var seen = Set<String>()
+        var instances: [String: Int] = [:]
         for tree in trees {
             visit(tree) { element in
-                guard element.flags == 1, Self.isReconstructable(element.typeName), !seen.contains(element.typeName),
-                      !element.children.isEmpty else { return }
+                instances[element.typeName, default: 0] += 1
+                guard element.flags == 1, Self.isReconstructable(element.typeName) else { return }
+                guard !seen.contains(element.typeName), !element.children.isEmpty else { return }
                 seen.insert(element.typeName)
                 let chain = Self.chain(from: element)
                 var component = Component(typeName: element.typeName, name: TypeNames.shortName(of: element.typeName), chain: chain)
@@ -44,6 +48,7 @@ struct ComponentReconstruction {
                 components.append(component)
             }
         }
+        for i in components.indices { components[i].instances = instances[components[i].typeName] ?? 1 }
     }
 
     /// SwiftUI views that are built as view lists too (and therefore missing from `_ViewDebug`).
@@ -114,30 +119,77 @@ struct ComponentReconstruction {
         // Outer components first: when two components resolve to the same node, the outer one ends up on top.
         let ordered = components.sorted { $0.chain.count > $1.chain.count }
         var claimed = Set<String>()
+        // App views wrapped around each node so far, and nodes two unrelated views both claimed.
+        var wrappers: [ObjectIdentifier: [(component: Component, node: RawDebugNode)]] = [:]
+        var contested: [ObjectIdentifier: [Component]] = [:]
 
         for component in ordered {
             if let layout = component.hoistedLayout {
                 applyHoisted(component, layout: layout, byType: byType)
                 continue
             }
-            guard let match = anchor(in: component.chain, anchorable: component.anchorable, byType: byType) else {
-                Self.log.append("\(component.name): no anchor")
-                continue
-            }
             let isSystem = !TypeNames.isAppType(component.typeName)
+            guard let placement = placements(of: component, isSystem: isSystem, byType: byType) else { continue }
+            let match = placement.anchor
             var count = 0
-            for node in byType[component.chain[match]] ?? [] {
-                let root = climb(from: node, chain: component.chain, anchorIndex: match)
+            for root in placement.roots {
                 // System views erase their content type (Button<A> and Button<B> share internals) – one per root.
                 let key = "\(isSystem ? component.name : component.typeName)#\(ObjectIdentifier(root).hashValue)"
                 if claimed.contains(key) { continue }
                 claimed.insert(key)
+                // Two app views claim the same node and neither is part of the other's body: sibling views built the
+                // same way (`MainTabItem` and `ChatTabItem`, both `HolaTabItem(…)`) in hosts that hold one of them
+                // each. Which one this is cannot be told, so the node gets neither.
+                let id = ObjectIdentifier(root)
+                if !isSystem {
+                    if contested[id]?.contains(where: { !Self.isNested(component, $0) }) == true { continue }
+                    let rivals = wrappers[id, default: []].filter { !Self.isNested(component, $0.component) }
+                    if !rivals.isEmpty {
+                        rivals.forEach { unwrap($0.node) }
+                        wrappers[id]?.removeAll { wrapper in rivals.contains { $0.node === wrapper.node } }
+                        contested[id, default: []] += rivals.map(\.component) + [component]
+                        Self.log.append("\(component.name): same node as \(rivals.map(\.component.name).joined(separator: ", ")), left unnamed")
+                        continue
+                    }
+                }
                 let readable = isSystem ? AttributeGraphTree.readable(component.typeName) : component.name
-                wrap([root], typeName: component.typeName, readable: readable)
+                let synthetic = wrap([root], typeName: component.typeName, readable: readable)
+                if !isSystem { wrappers[id, default: []].append((component, synthetic)) }
                 count += 1
             }
             Self.log.append("\(component.name): anchor \(AttributeGraphTree.readable(component.chain[match]).prefix(70)) → \(count)")
         }
+    }
+
+    /// The nodes `component` wraps: the roots its most specific anchor climbs to, without the ones that are a node
+    /// of its type already (an app's `GeometryEffect` or `ViewModifier` is in `_ViewDebug` itself). An anchor that
+    /// leads to more nodes than the view has instances is not this view's, the name would land on unrelated nodes:
+    /// the next anchor is tried, and with none left the view stays unnamed.
+    private func placements(of component: Component, isSystem: Bool,
+                            byType: [String: [RawDebugNode]]) -> (anchor: Int, roots: [RawDebugNode])? {
+        let candidates = component.anchorable.filter { byType[component.chain[$0]]?.isEmpty == false }.sorted { a, b in
+            let ca = byType[component.chain[a]]!.count, cb = byType[component.chain[b]]!.count
+            if ca != cb { return ca < cb }
+            if component.chain[a].count != component.chain[b].count { return component.chain[a].count > component.chain[b].count }
+            return a < b
+        }
+        guard !candidates.isEmpty else {
+            Self.log.append("\(component.name): no anchor")
+            return nil
+        }
+        let limit = max(2 * component.instances, component.instances + 2)
+        for index in candidates {
+            var roots: [RawDebugNode] = []
+            for node in byType[component.chain[index]] ?? [] {
+                let root = climb(from: node, chain: component.chain, anchorIndex: index)
+                if Self.hasNode(ofType: component.typeName, above: root) || roots.contains(where: { $0 === root }) { continue }
+                roots.append(root)
+            }
+            if isSystem || roots.count <= limit { return (index, roots) }
+            Self.log.append("\(component.name): anchor \(AttributeGraphTree.readable(component.chain[index]).prefix(70)) "
+                            + "ambiguous, \(roots.count) nodes for \(component.instances)")
+        }
+        return nil
     }
 
     /// Chain types that can anchor a component. Plain `Text`, `_PaddingLayout`, `Spacer`… say nothing about
@@ -145,9 +197,61 @@ struct ComponentReconstruction {
     private static func anchorableIndices(_ chain: [String]) -> [Int] {
         chain.indices.filter { i in
             let type = chain[i]
-            if genericBases.contains(TypeNames.shortName(of: type)) { return false }
+            if isUninformative(type) { return false }
             return type.contains("<") || TypeNames.isAppType(type)
         }
+    }
+
+    /// A wrapper that shows up everywhere, or one built only of them:
+    /// `ModifiedContent<PlaceholderContentView<OpacityTransition>, OpacityRendererEffect>` is in every view with an
+    /// opacity transition.
+    static func isUninformative(_ type: String) -> Bool {
+        let base = TypeNames.base(of: TypeNames.shortName(of: type))
+        if genericBases.contains(base) { return true }
+        guard base == "ModifiedContent" || base == "_ConditionalContent" else { return false }
+        let arguments = TypeNames.genericArguments(of: type)
+        return !arguments.isEmpty && arguments.allSatisfy(isUninformative)
+    }
+
+    /// One of the two views is built from the other (`ChatTabItem`'s body is a `HolaTabItem`).
+    private static func isNested(_ a: Component, _ b: Component) -> Bool {
+        a.chain.contains { mentions($0, b.typeName) } || b.chain.contains { mentions($0, a.typeName) }
+    }
+
+    /// `type` is `name` or has it among its generic arguments (`ModifiedContent<…, Demo.CardStyle>`).
+    private static func mentions(_ type: String, _ name: String) -> Bool {
+        var start = type.startIndex
+        while let range = type.range(of: name, range: start..<type.endIndex) {
+            let before = range.lowerBound == type.startIndex ? nil : type[type.index(before: range.lowerBound)]
+            let after = range.upperBound == type.endIndex ? nil : type[range.upperBound]
+            let boundary: (Character?) -> Bool = { c in c.map { !($0.isLetter || $0.isNumber || $0 == "_" || $0 == ".") } ?? true }
+            if boundary(before), boundary(after) { return true }
+            start = range.upperBound
+        }
+        return false
+    }
+
+    /// Takes a synthetic node out again, its children in its place.
+    private func unwrap(_ synthetic: RawDebugNode) {
+        guard let parent = synthetic.parent, let index = parent.children.firstIndex(where: { $0 === synthetic }) else { return }
+        parent.children.replaceSubrange(index...index, with: synthetic.children)
+        synthetic.children.forEach { $0.parent = parent }
+        synthetic.children = []
+    }
+
+    /// A node of `type` right above `node`, in the chain of single children that leads to it.
+    private static func hasNode(ofType type: String, above node: RawDebugNode) -> Bool {
+        var current = node.parent
+        var below = node
+        var steps = 0
+        while let p = current, steps < 8 {
+            if !p.isSynthetic, p.typeName == type { return true }
+            guard p.children.count == 1, p.children[0] === below else { return false }
+            below = p
+            current = p.parent
+            steps += 1
+        }
+        return false
     }
 
     /// The most specific chain type present in the `_ViewDebug` tree: fewest occurrences, then the most detailed

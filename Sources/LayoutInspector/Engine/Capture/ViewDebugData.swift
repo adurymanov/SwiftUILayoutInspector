@@ -199,6 +199,9 @@ final class RawDebugNode {
         for c in children { c.parent = self }
     }
 
+    /// The view or modifier itself, as SwiftUI recorded it; `nil` when it was read from SwiftUI's encoding.
+    var swiftValue: Any? { ViewDebugReader.unwrapped(rawValue) }
+
     /// `value?.at(path)` without reflecting the rest of the value. The walk down `path` follows SwiftUI's own
     /// reflection (`ViewDebugReader.reflectedChildren`), and only the part at its end is encoded by SwiftUI, with
     /// the reflection depth it has inside the whole value. `nil` when that is not possible (the caller reads
