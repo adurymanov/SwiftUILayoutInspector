@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
-    case profile, feed, checkout, dashboard, promo, glass, spaces, heavy, rerenders
+    case profile, feed, checkout, dashboard, promo, glass, spaces, heavy, rerenders, deep, labels
 
     var id: String { rawValue }
 
@@ -16,6 +16,8 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .spaces: "Coordinate spaces"
         case .heavy: "Heavy home"
         case .rerenders: "Re-renders"
+        case .deep: "Deep chain"
+        case .labels: "Many labels"
         }
     }
 
@@ -30,6 +32,8 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .spaces: "geometryGroup, drawingGroup, transform and visual effects"
         case .heavy: "A big app's home: many views, large models, glass – for timing"
         case .rerenders: "@Observable model: only the readers of a changed property update"
+        case .deep: "20+ same-size wrappers with long names, zero-size views, many rows"
+        case .labels: "One text component 200+ times: lazy rows off screen, nested, a hidden copy"
         }
     }
 
@@ -44,6 +48,8 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .spaces: "square.3.layers.3d"
         case .heavy: "gauge.with.dots.needle.67percent"
         case .rerenders: "flame"
+        case .deep: "list.bullet.indent"
+        case .labels: "textformat"
         }
     }
 
@@ -63,6 +69,8 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .spaces: SpacesScreen()
         case .heavy: HeavyScreen()
         case .rerenders: RerenderScreen()
+        case .deep: DeepChainScreen()
+        case .labels: LabelsScreen()
         }
     }
 }

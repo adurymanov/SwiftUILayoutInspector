@@ -40,9 +40,6 @@ CFTypeRef _Nullable LIAGGraphDescription(const void * _Nonnull graph, CFDictiona
 /// `AGGraphGetValue`: the value of `attribute`, whose type is `type` (Swift metadata). `NULL` when unavailable, and
 /// when the value is out of date: reading it then would run the rule that computes it (a view's parent body).
 const void * _Nullable LIAGGraphGetValue(uint32_t attribute, const void * _Nonnull type);
-/// The attribute SwiftUI recorded under `key` (`"position"`, `"size"`) for an element, and its type; 0 when there is
-/// none. Recorded only for the `SWIFTUI_VIEW_DEBUG` properties.
-uint32_t LIAGTreeElementGetValueNamed(LIAGTreeElement _Nonnull element, const char * _Nonnull key, const void * _Nullable * _Nonnull type);
 /// Writes up to `max` attributes (the graph nodes) an element owns into `out`, returns how many were written.
 int LIAGTreeElementGetNodes(LIAGTreeElement _Nonnull element, uint32_t * _Nonnull out, int max);
 

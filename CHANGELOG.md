@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.10
+
+- Components list v2, made for a phone: one compact row per view (name, then frame and the view it is in), no
+  indentation. Same-size chains of wrappers fold into one row with a `+N wrappers` chip; the details list the
+  chain, the parents and the children.
+- Filters under the search field, kept between launches: Visible, Hide wrappers, App types (on by default),
+  Re-rendered, Has state, Module; sorting by reading order, re-renders or area. The search matches the module too.
+- Pick on screen: the target button lowers the sheet, and a tap keeps the views under that point, smallest first.
+- Re-renders tells apart the views of one type by the texts they were built with, so a text component used all
+  over a lazy list (rows off screen included) gets a count per label. Views it still can't tell apart get a faint outline, and their
+  total shows once, in the panel and in the components list, instead of `Σ` on every one of them.
+- Re-renders marks only the views whose body ran; Dev → Show zeros marks the others too.
+- The info card of Re-renders, Lint and Measure is a glass panel that folds into a pill with a tap and stays
+  folded. With the controls hidden it is drawn into the overlay as before.
+- `LayoutInspector.version` says 0.2.10 (0.2.9 still said 0.2.8); a demo test keeps it equal to the top of this
+  file and to `li`.
+- An app launched with `LAYOUT_INSPECTOR_DUMP` leaves `redirect.json` in its usual report folder, and `li` follows
+  it without `--reports-dir`.
+- Demo: a screen under a 20-deep chain of wrappers with long names, zero-size views and many rows, and a screen
+  with one text component 200 times in a lazy list.
+
 ## 0.2.9
 
 - Placing component names is fast again. 0.2.4 added a check of whether one view is built from another, and it

@@ -90,6 +90,74 @@ final class RerenderTests: XCTestCase {
         XCTAssertEqual(before.values.reduce(0, +), 3)
     }
 
+    /// One text component all over a lazy list: the graph holds more of them than the capture shows (rows off screen,
+    /// a hidden copy), and each one on screen still gets its own count.
+    func test_lazyList_countsEachLabel() async throws {
+        guard RenderProfiler.isAvailable else { throw XCTSkip("AttributeGraph profiling is not available") }
+        let model = LedgerModel()
+        let harness = ScreenHarness(LabelsScreen(model: model))
+        defer { harness.tearDown() }
+        try await harness.waitUntilLoaded()
+        // Scrolled down and back: the lazy stack keeps the rows it built below the screen.
+        let scroll = try XCTUnwrap(Self.scrollView(in: harness.window))
+        for y in [800.0, 1600, 0] {
+            scroll.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+            harness.window.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(300))
+        }
+        let capture = try await harness.waitUntilLoaded()
+        capture.resolveFrames(in: harness.window)
+        let heatmap = RenderHeatmap()
+        heatmap.profiler.start(hosts: Self.hosts(in: harness.window))
+        defer { heatmap.profiler.stop() }
+        try Self.skipWithoutGraph(heatmap)
+        heatmap.map(capture)
+
+        let labels = capture.swiftUINodes.filter { $0.title == "BrandLabel" }
+        let inGraph = Self.hosts(in: harness.window).flatMap { ComponentGraph.views(of: $0)["InspectorDemo.BrandLabel"] ?? [] }
+        XCTAssertGreaterThan(inGraph.count, labels.count, "the graph should hold labels the capture doesn't show")
+
+        for _ in 0..<3 { model.lines[2].amount += 1; harness.window.layoutIfNeeded() }
+        let counts = heatmap.read()
+        // Labels of a row are told apart by their text. The identical "Card payment" labels, and the header with its
+        // hidden copy, may share a count.
+        let unique = labels.filter { label in ComponentGraph.texts(in: label).contains { $0.hasPrefix("Payment") || $0.hasPrefix("$") } }
+        XCTAssertGreaterThan(unique.count, 20)
+        let shared = unique.filter { counts.byNode[$0.id]?.instances != 1 }
+        XCTAssertEqual(shared.map { ComponentGraph.texts(in: $0).first ?? "" }, [], "labels with their own text sharing a count")
+        let changed = labels.filter { counts.byNode[$0.id]?.count == 3 }
+        XCTAssertEqual(changed.count, 1)
+        let rows = capture.swiftUINodes.filter { $0.title == "LedgerRow" && $0.isVisible }.sorted { $0.frame.minY < $1.frame.minY }
+        XCTAssertGreaterThan(rows.count, 2)
+        XCTAssertTrue(rows.count > 2 && changed.first.map { label in label.path.contains { $0 === rows[2] } } == true,
+                      "the count is on another label")
+        XCTAssertEqual(labels.compactMap { counts.byNode[$0.id]?.count }.reduce(0, +), 3)
+    }
+
+    /// Views that share a count are not labelled one by one: the total shows once, in the panel.
+    func test_sharedCount_isShownOnce() async throws {
+        let harness = ScreenHarness(RerenderScreen())
+        defer { harness.tearDown() }
+        let capture = try await harness.waitUntilLoaded()
+        try XCTSkipIf(capture.nodes(.component).isEmpty, "no component names on this iOS version (iOS 18)")
+        let rows = capture.swiftUINodes.filter { $0.title == "QuoteRow" }
+        let balance = try XCTUnwrap(capture.swiftUINodes.first { $0.title == "WalletBalance" })
+        var counts = RenderCounts()
+        for row in rows { counts.byNode[row.id] = .init(count: 6, instances: rows.count) }
+        counts.byNode[balance.id] = .init(count: 5, instances: 1)
+
+        var options = InspectorRenderOptions(mode: .rerenders)
+        options.renderCounts = counts
+        let card = InspectorCard()
+        options.card = card
+        _ = InspectorImageRenderer.image(of: harness.window, capture: capture, options: options)
+        let lines = try XCTUnwrap(card.content?.lines)
+        XCTAssertEqual(lines.first, "hottest: WalletBalance 5")
+        XCTAssertEqual(lines.filter { $0.contains("QuoteRow") }, ["QuoteRow: Σ6 across 3 views it can't tell apart"])
+        XCTAssertEqual(ComponentListView.sharedCounts(counts, items: ComponentList(capture).all),
+                       ["QuoteRow Σ6 across 3 views it can't tell apart"])
+    }
+
     /// A sheet counted while it is on screen goes away: nothing keeps its graph, and profiling ends with its inspector.
     func test_dismissedSheet_endsProfilingSafely() async throws {
         guard RenderProfiler.isAvailable else { throw XCTSkip("AttributeGraph profiling is not available") }
@@ -168,6 +236,12 @@ final class RerenderTests: XCTestCase {
         capture.swiftUINodes.filter { $0.kind == .component && $0.title == title }
             .sorted { $0.anchor.rect.minY < $1.anchor.rect.minY }
             .map { counts.byNode[$0.id]?.count ?? -1 }
+    }
+
+    private static func scrollView(in view: UIView) -> UIScrollView? {
+        if let scroll = view as? UIScrollView, scroll.contentSize.height > scroll.bounds.height { return scroll }
+        for subview in view.subviews { if let found = scrollView(in: subview) { return found } }
+        return nil
     }
 
     private static func skipWithoutGraph(_ heatmap: RenderHeatmap) throws {

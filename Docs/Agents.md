@@ -56,7 +56,8 @@ writes nothing.
 
 Where:
 
-1. `LAYOUT_INSPECTOR_DUMP`, if set (the directory also gets the `capture-NNN.txt` dumps);
+1. `LAYOUT_INSPECTOR_DUMP`, if set (the directory also gets the `capture-NNN.txt` dumps). In the simulator the
+   app then leaves `redirect.json` (`{"reports": "<path>"}`) in the folder of item 2, and `li` follows it;
 2. in the simulator, a folder of the Mac user that the Mac reads directly:
    `~/Library/Caches/LayoutInspector/<simulator udid>/<bundle id>/`;
 3. otherwise, or when that is not writable, `Library/Caches/LayoutInspector/` in the app's container
@@ -70,7 +71,7 @@ last: when it names a capture, the other two files already hold that capture.
 ```json
 {
   "schemaVersion": 1,
-  "library": "0.2.8",
+  "library": "0.2.10",
   "updated": 1795275048.79,
   "app": { "bundleID": "dev.layoutinspector.example", "process": "InspectorDemo", "pid": 32529, "launchID": "23A0…" },
   "enabled": true,
@@ -94,7 +95,7 @@ last: when it names a capture, the other two files already hold that capture.
 ```json
 {
   "schemaVersion": 1,
-  "library": "0.2.8",
+  "library": "0.2.10",
   "graph": true,
   "space": { "width": 402, "height": 874, "scale": 3 },
   "capture": { "…": "as in status.json" },
@@ -182,8 +183,9 @@ li dirs | version
 ```
 
 - The device is `--device`, else `$LI_DEVICE`, else `$SIMULATOR_UDID`, else the only booted simulator.
-- `li` reads `status.json` from `~/Library/Caches/LayoutInspector/<udid>/<bundle id>/`. For an app launched with
-  `LAYOUT_INSPECTOR_DUMP`, or one that fell back to its own container, pass `--reports-dir`.
+- `li` reads `status.json` from `~/Library/Caches/LayoutInspector/<udid>/<bundle id>/`. An app launched with
+  `LAYOUT_INSPECTOR_DUMP` leaves `redirect.json` there and `li` follows it; for one that fell back to its own
+  container, pass `--reports-dir`.
 - `measure` takes `--index` for A and `--index-b` for B when several elements match.
 - On iOS 18 the inspector can't read component names (the app's own view types), so `component` is missing and
   `--type` finds only SwiftUI types such as `VStack`.

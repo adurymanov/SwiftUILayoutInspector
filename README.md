@@ -35,7 +35,7 @@ and the data comes from the SwiftUI runtime — the same debug graph Xcode's vie
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.9"),
+.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.10"),
 
 .target(name: "App", dependencies: [
     .product(name: "LayoutInspector", package: "SwiftUILayoutInspector"),
@@ -172,8 +172,9 @@ computed while navigating; the button shows the capture's progress.
 ### Re-renders
 
 Dev → Re-renders counts how many times the `body` of each app view ran, from the moment the mode was turned on
-or since Dev → Reset counts. Every component is tinted from blue (few runs) to red (many) and labelled with its
-count; the counts update once a second on the geometry of the last capture. Change one property of an
+or since Dev → Reset counts. Every component whose body ran is tinted from blue (few runs) to red (many) and
+labelled with its count; Dev → Show zeros marks the others too. The counts update once a second on the geometry of
+the last capture. Change one property of an
 `@Observable` model and only the views that read it heat up. Share report adds `renders N` to every counted view.
 
 The counts are exact. They come from SwiftUI's AttributeGraph, which records how often each of its nodes was
@@ -189,18 +190,39 @@ takes more than 5 % of the time.
 Profiling is switched for the whole process: turning the mode on resets, and turning it off stops, a profile
 that Instruments' SwiftUI template may be recording at the same time.
 
-When views of one type can't be told apart (the capture shows a different number of them than the graph holds),
-they share their total, labelled `Σ12/3`: twelve runs of three views. On iOS 18 the inspector can't reach the
-view graph, so the mode shows a note instead of counts.
+Each view is found in the graph by the texts it was built with, so one text component used two hundred times, in
+a lazy list with rows off screen, gets a count per label. Views that still can't be told apart get a
+faint outline and no label; the panel and the components list show their total once (`Σ12 across 3 views`). On
+iOS 18 the inspector can't reach the view graph, so the mode shows a note instead of counts.
+
+The summary sits in a glass panel at the bottom (Lint's issue list and Measure's hint too). A tap folds it into a
+small pill so it doesn't cover the screen; it stays folded until it is opened again.
 
 ### Components list
 
-Dev → Components list opens a sheet with the app's views on the current screen, nested as on screen, each with
-its frame and, while Re-renders is on, its count. Search by name or type. A tap on a row outlines the view on
-screen and lowers the sheet so it can be seen; Share sends the list as text.
+Dev → Components list opens a sheet with the app's views on the current screen, one compact row each: the name,
+and below it the frame and the view it is in. Chains of views and modifiers of one size around a screen fold into
+one row, the innermost view that isn't a modifier, marked `+12 wrappers`. A tap on a row outlines the view on
+screen and lowers the sheet; Share sends the rows as text.
+
+Filters under the search field, kept between launches:
+
+| filter | keeps |
+|---|---|
+| Visible (on) | views with a size, on screen, not hidden by a presentation |
+| Hide wrappers (on) | one row per same-size chain; `ViewModifier`s are not rows |
+| App types (on) | types outside SwiftUI and the system modules |
+| Re-rendered | views whose body ran, with Re-renders on |
+| Has state | views with `@State` or `@Binding` |
+| Module | the views of one module |
+
+Rows are sorted in reading order, by re-renders or by area. The search matches the name, the type and the module.
+The target button picks a point instead: the sheet lowers, a tap on the screen keeps the views under that point,
+smallest first, and outlines the smallest.
 
 The info button shows what the overlay doesn't draw:
 
+- the parents as a breadcrumb and the children, to walk the tree, and the wrappers folded into the row;
 - the view's properties as its parent built it, read from SwiftUI's graph: `index: 1`,
   `quote: Quote(price: 80)`;
 - `@State`, `@Binding`, `@Environment` and observed objects by name and type. A binding shows its value. `@State`
@@ -225,7 +247,7 @@ top-level `environment`, and the same `properties` per component when the app ru
   API:
 
   ```swift
-  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.9", traits: []),
+  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.10", traits: []),
   ```
 
   Package traits apply to every build configuration. To keep the inspector in Debug and drop it from Release,

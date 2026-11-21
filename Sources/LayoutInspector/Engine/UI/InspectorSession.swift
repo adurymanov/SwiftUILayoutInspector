@@ -13,6 +13,10 @@ final class InspectorOverlayView: UIView {
     weak var space: UIView?
     /// Where the inspected view was (in `space`) when the overlay was drawn last.
     private(set) var drawnScopeOrigin: CGPoint?
+    /// Receives the info card when `options.card` is set; `onCardChange` hears when it changes.
+    let card = InspectorCard()
+    var onCardChange: ((InspectorCard.Content?) -> Void)?
+    private var shownCard: InspectorCard.Content?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -25,6 +29,14 @@ final class InspectorOverlayView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     override func draw(_ rect: CGRect) {
+        card.content = nil
+        defer {
+            if card.content != shownCard {
+                shownCard = card.content
+                let content = card.content
+                DispatchQueue.main.async { [weak self] in self?.onCardChange?(content) }
+            }
+        }
         guard let capture, let ctx = UIGraphicsGetCurrentContext() else { return }
         let space = space ?? self
         capture.resolveFrames(in: space)
@@ -56,6 +68,15 @@ final class InspectorSession: ObservableObject {
     @Published private(set) var captureProgress: Double?
     /// Body evaluations per component while ``LayoutInspector/Mode/rerenders`` is on; `nil` otherwise.
     @Published private(set) var renderCounts: RenderCounts?
+    /// Re-renders marks the views whose body didn't run too. Kept between launches.
+    @Published var showsZeroRenders = UserDefaults.standard.bool(forKey: "LayoutInspector.showsZeroRenders") {
+        didSet {
+            UserDefaults.standard.set(showsZeroRenders, forKey: "LayoutInspector.showsZeroRenders")
+            syncOptions()
+        }
+    }
+    /// The info card of the mode (lint list, measure hint, re-render summary), shown as a panel above the overlay.
+    @Published private(set) var panel: InspectorCard.Content?
 
     /// Called when the configuration is changed from the toolbar (not from `apply(_:)`).
     var onConfigurationChange: ((LayoutInspector.Configuration) -> Void)?
@@ -99,6 +120,7 @@ final class InspectorSession: ObservableObject {
     init(configuration: LayoutInspector.Configuration) {
         self.configuration = configuration
         isHighlighting = configuration.highlightsOnAppear
+        overlay.onCardChange = { [weak self] in self?.panel = $0 }
         syncOptions()
     }
 
@@ -179,6 +201,9 @@ final class InspectorSession: ObservableObject {
         options.selectedID = selectedID
         options.measureTargetID = measureTargetID
         options.renderCounts = renderCounts
+        options.showsZeroRenders = showsZeroRenders
+        // With the controls hidden (screenshots, demos) the card is drawn into the overlay as before.
+        options.card = configuration.toolbar == .hidden ? nil : overlay.card
         if let pillTop {
             let bottom = overlay.scope.map { min($0.maxY, overlay.bounds.maxY) } ?? overlay.bounds.maxY
             options.cardBottomInset = max(24, bottom - pillTop + 8)
@@ -535,10 +560,24 @@ final class InspectorSession: ObservableObject {
 
     /// Whether a tap at `point` (overlay coordinates) belongs to the inspector rather than to the app.
     func catchesTap(at point: CGPoint) -> Bool {
-        isHighlighting && configuration.effectiveSelectsOnTap && (overlay.scope?.contains(point) ?? true)
+        if pointPicker != nil { return overlay.scope?.contains(point) ?? true }
+        return isHighlighting && configuration.effectiveSelectsOnTap && (overlay.scope?.contains(point) ?? true)
+    }
+
+    /// Takes the next tap on the inspected area for the components list instead of the app or the selection.
+    /// `nil` cancels a pick in progress.
+    private var pointPicker: ((CGPoint) -> Void)?
+
+    func pickPoint(_ picked: ((CGPoint) -> Void)?) {
+        pointPicker = picked
     }
 
     func handleTap(at point: CGPoint) {
+        if let picker = pointPicker {
+            pointPicker = nil
+            picker(point)
+            return
+        }
         guard let node = node(at: point) else { selectedID = nil; measureTargetID = nil; return }
         if configuration.mode == .measure, let selected = selectedID, measureTargetID == nil, selected != node.id {
             measureTargetID = node.id

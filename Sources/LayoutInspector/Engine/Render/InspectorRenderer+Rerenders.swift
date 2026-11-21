@@ -17,34 +17,59 @@ extension InspectorRenderer {
         // Larger views first, so nested ones are drawn on top of their containers.
         let ordered = components.sorted { $0.frame.width * $0.frame.height > $1.frame.width * $1.frame.height }
         let counts = options.renderCounts ?? RenderCounts()
-        let scale = log1p(max(counts.maxPerView, 1))
+        let own = counts.byNode.filter { $0.value.instances == 1 }
+        let scale = log1p(max(own.values.map(\.perView).max() ?? 0, 1))
+        let showsZeros = options.showsZeroRenders
 
         for node in ordered {
             guard let entry = counts.byNode[node.id] else {
-                stroke(ctx, node.frame, Palette.neutral.withAlphaComponent(0.6), width: 0.75, dash: [3, 2])
+                if showsZeros { stroke(ctx, node.frame, Palette.neutral.withAlphaComponent(0.6), width: 0.75, dash: [3, 2]) }
                 continue
             }
+            // A count shared by views that can't be told apart says nothing about this one: a faint outline, and the
+            // total once, in the panel.
+            if entry.instances > 1 {
+                if showsZeros || entry.count > 0 { stroke(ctx, node.frame, Palette.neutral.withAlphaComponent(0.45), width: 0.75, dash: [2, 2]) }
+                continue
+            }
+            guard entry.count > 0 || showsZeros else { continue }
             let heat = entry.count == 0 ? 0 : max(0.08, log1p(entry.perView) / scale)
             let color = Self.heatColor(heat)
             fill(ctx, node.frame, color.withAlphaComponent(entry.count == 0 ? 0.04 : 0.12 + 0.3 * heat))
             stroke(ctx, node.frame, color, width: entry.count == 0 ? 0.75 : 1.5)
         }
-        guard options.showLabels else { return }
-        // Hot views get their labels first: when labels collide, the cold ones give way.
-        let labelled = ordered.compactMap { node in counts.byNode[node.id].map { (node, $0) } }
-            .sorted { $0.1.perView > $1.1.perView }
-        for (node, entry) in labelled {
-            let heat = entry.count == 0 ? 0 : max(0.08, log1p(entry.perView) / scale)
-            tags.place("\(node.title) \(entry.label)", near: node.frame, color: Self.heatColor(heat).withAlphaComponent(0.95), ctx: ctx)
+        if options.showLabels {
+            // Hot views get their labels first: when labels collide, the cold ones give way.
+            let labelled = ordered.compactMap { node in own[node.id].map { (node, $0) } }
+                .filter { showsZeros || $0.1.count > 0 }
+                .sorted { $0.1.perView > $1.1.perView }
+            for (node, entry) in labelled {
+                let heat = entry.count == 0 ? 0 : max(0.08, log1p(entry.perView) / scale)
+                tags.place("\(node.title) \(entry.label)", near: node.frame, color: Self.heatColor(heat).withAlphaComponent(0.95), ctx: ctx)
+            }
         }
-        var lines = ["body runs since the mode was turned on or reset"]
-        if let hottest = counts.hottest, hottest.entry.count > 0, let node = capture.node(withID: hottest.id) {
-            lines.insert("hottest: \(node.title) \(hottest.entry.label)", at: 0)
+        card(ctx, title: "Re-renders", lines: Self.panelLines(counts, capture: capture, showsZeros: showsZeros))
+    }
+
+    /// The hottest view, and each type whose views share one count, once.
+    static func panelLines(_ counts: RenderCounts, capture: InspectorCapture, showsZeros: Bool) -> [String] {
+        var lines: [String] = []
+        if let hottest = counts.byNode.filter({ $0.value.instances == 1 }).max(by: { $0.value.count < $1.value.count }),
+           hottest.value.count > 0, let node = capture.node(withID: hottest.key) {
+            lines.append("hottest: \(node.title) \(hottest.value.label)")
+        } else {
+            lines.append("no view re-rendered since the mode was turned on or reset")
         }
-        if counts.byNode.values.contains(where: { $0.instances > 1 }) {
-            lines.append("Σn/k: n runs shared by k views of one type")
+        var shared: [String: RenderCounts.Entry] = [:]
+        for (id, entry) in counts.byNode where entry.instances > 1 {
+            guard let node = capture.node(withID: id) else { continue }
+            shared[node.title] = entry
         }
-        card(ctx, title: "Re-renders", lines: lines)
+        for (title, entry) in shared.sorted(by: { $0.value.count != $1.value.count ? $0.value.count > $1.value.count : $0.key < $1.key }) {
+            lines.append("\(title): Σ\(entry.count) across \(entry.instances) views it can't tell apart")
+        }
+        if !showsZeros { lines.append("views that didn't re-render are not marked (Dev → Show zeros)") }
+        return lines
     }
 
     /// 0 – blue, 0.5 – green, 1 – red.

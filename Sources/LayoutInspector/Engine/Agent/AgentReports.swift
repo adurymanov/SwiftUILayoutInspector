@@ -141,16 +141,27 @@ enum AgentReports {
 
     private static func resolveDirectory() -> (url: URL?, isFallback: Bool) {
         let env = ProcessInfo.processInfo.environment
-        if let dump = env["LAYOUT_INSPECTOR_DUMP"], !dump.isEmpty {
-            let url = URL(fileURLWithPath: dump, isDirectory: true)
-            if isWritable(url) { return (url, false) }
-        }
+        var hostFolder: URL?
         if let home = env["SIMULATOR_HOST_HOME"], let udid = env["SIMULATOR_UDID"] {
-            let url = URL(fileURLWithPath: home, isDirectory: true)
+            hostFolder = URL(fileURLWithPath: home, isDirectory: true)
                 .appendingPathComponent("Library/Caches/LayoutInspector", isDirectory: true)
                 .appendingPathComponent(udid, isDirectory: true)
                 .appendingPathComponent(Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName, isDirectory: true)
-            if isWritable(url) { return (url, false) }
+        }
+        if let dump = env["LAYOUT_INSPECTOR_DUMP"], !dump.isEmpty {
+            let url = URL(fileURLWithPath: dump, isDirectory: true)
+            if isWritable(url) {
+                // `li` looks in the folder of the simulator and the app: it finds the way to the dump there.
+                if let hostFolder, isWritable(hostFolder),
+                   let data = try? JSONSerialization.data(withJSONObject: ["reports": url.path]) {
+                    try? data.write(to: hostFolder.appendingPathComponent("redirect.json"), options: .atomic)
+                }
+                return (url, false)
+            }
+        }
+        if let url = hostFolder, isWritable(url) {
+            try? FileManager.default.removeItem(at: url.appendingPathComponent("redirect.json"))
+            return (url, false)
         }
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
         if let url = caches?.appendingPathComponent("LayoutInspector", isDirectory: true), isWritable(url) {

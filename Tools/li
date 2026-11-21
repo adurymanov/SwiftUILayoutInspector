@@ -20,7 +20,8 @@ Simulator (the app runs a Debug build that calls LayoutInspector.bootstrap()):
             match (0-based); for measure, --index-b picks among the matches of B. query and measure read the
             latest capture of --device, or --dir / --file.
   --reports-dir DIR (or $LI_REPORTS_DIR for the root): where the app writes status.json when that is not
-            ~/Library/Caches/LayoutInspector/<udid>/<bundle>, e.g. an app launched with LAYOUT_INSPECTOR_DUMP.
+            ~/Library/Caches/LayoutInspector/<udid>/<bundle>. Not needed for LAYOUT_INSPECTOR_DUMP since 0.2.10:
+            the app leaves redirect.json there.
 
 Xcode previews (headless Xcode, no Xcode window; needs the library 0.2.6+ linked by the file's module):
   exec li bridge                            start the MCP bridge first, from the agent's own shell (see below)
@@ -44,7 +45,7 @@ import tempfile
 import time
 import uuid
 
-LI_VERSION = "0.2.8"
+LI_VERSION = "0.2.10"
 SCHEMA_VERSION = 1
 PREFIX = "dev.layoutinspector."
 MODES = ["components", "spacing", "typography", "constraints", "uikit", "lint", "measure", "rerenders"]
@@ -152,7 +153,13 @@ def app_folders(udid, bundle, args=None):
     explicit = args.get("--reports-dir") if args else None
     if explicit:
         return [os.path.abspath(explicit)]
-    return [os.path.join(device_dir(udid), bundle)] if bundle else app_dirs(udid)
+    return [follow(os.path.join(device_dir(udid), bundle))] if bundle else app_dirs(udid)
+
+
+def follow(folder):
+    """An app launched with LAYOUT_INSPECTOR_DUMP leaves redirect.json in its usual folder: where the reports are."""
+    target = (read_json(os.path.join(folder, "redirect.json")) or {}).get("reports")
+    return target if target and os.path.isdir(target) else folder
 
 
 def read_json(path):
@@ -167,6 +174,7 @@ def app_dirs(udid):
     """Report folders of apps on this simulator, most recently updated first."""
     result = []
     for d in glob.glob(os.path.join(device_dir(udid), "*")):
+        d = follow(d)
         status = os.path.join(d, "status.json")
         if os.path.isfile(status):
             result.append((os.path.getmtime(status), d))

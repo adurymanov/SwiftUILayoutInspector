@@ -39,18 +39,6 @@ typedef struct { const void *value; bool changed; } LIValue;
 typedef LIValue (*GraphGetValueFn)(uint32_t, uint32_t, const void *);
 typedef uint8_t (*GraphGetValueStateFn)(uint32_t);
 static GraphGetValueFn graphGetValue;
-// { element, next value } – returned in registers.
-typedef struct { const void *element; const void *next; } LIValueIterator;
-typedef LIValueIterator (*MakeValueIteratorFn)(LIAGTreeElement);
-typedef const void *(*NextValueFn)(LIValueIterator *);
-typedef const char *(*TreeValueKeyFn)(const void *);
-typedef uint32_t (*TreeValueValueFn)(const void *);
-typedef const void *(*TreeValueTypeFn)(const void *);
-static MakeValueIteratorFn makeValueIterator;
-static NextValueFn nextValue;
-static TreeValueKeyFn treeValueKey;
-static TreeValueValueFn treeValueValue;
-static TreeValueTypeFn treeValueType;
 static GraphGetValueStateFn graphGetValueState;
 
 static MakeNodeIteratorFn makeNodeIterator;
@@ -84,11 +72,6 @@ static void resolve(void) {
     graphDescription = (GraphDescriptionFn)dlsym(h, "AGGraphDescription");
     graphGetValue = (GraphGetValueFn)dlsym(h, "AGGraphGetValue");
     graphGetValueState = (GraphGetValueStateFn)dlsym(h, "AGGraphGetValueState");
-    makeValueIterator = (MakeValueIteratorFn)dlsym(h, "AGTreeElementMakeValueIterator");
-    nextValue = (NextValueFn)dlsym(h, "AGTreeElementGetNextValue");
-    treeValueKey = (TreeValueKeyFn)dlsym(h, "AGTreeValueGetKey");
-    treeValueValue = (TreeValueValueFn)dlsym(h, "AGTreeValueGetValue");
-    treeValueType = (TreeValueTypeFn)dlsym(h, "AGTreeValueGetType");
 }
 
 bool LIAGIsAvailable(void) {
@@ -163,23 +146,6 @@ const void *LIAGGraphGetValue(uint32_t attribute, const void *type) {
     uint8_t state = graphGetValueState(attribute);
     if ((state & 0x7) != 0 || (state & 0x8) == 0) return NULL;
     return graphGetValue(attribute, 0, type).value;
-}
-
-uint32_t LIAGTreeElementGetValueNamed(LIAGTreeElement element, const char *key, const void **type) {
-    resolve();
-    *type = NULL;
-    if (!LIAGProfilingIsAvailable() || !makeValueIterator || !nextValue || !treeValueKey || !treeValueValue || !treeValueType) return 0;
-    LIValueIterator it = makeValueIterator(element);
-    for (int i = 0; i < 64; i++) {
-        const void *value = nextValue(&it);
-        if (!value) break;
-        const char *name = treeValueKey(value);
-        if (name && strcmp(name, key) == 0) {
-            *type = treeValueType(value);
-            return treeValueValue(value);
-        }
-    }
-    return 0;
 }
 
 int LIAGTreeElementGetNodes(LIAGTreeElement element, uint32_t *out, int max) {

@@ -66,6 +66,14 @@ final class InspectorRootViewController: UIViewController {
         tapCatcher.backgroundColor = .clear
         tapCatcher.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tap(_:))))
 
+        let panel = UIHostingController(rootView: InspectorPanel(session: session))
+        embed(panel)
+        NSLayoutConstraint.activate([
+            panel.view.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            panel.view.trailingAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -68),
+            panel.view.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8),
+        ])
+
         pill = UIHostingController(rootView: InspectorToolbar(session: session))
         embed(pill)
         pillX = pill.view.centerXAnchor.constraint(equalTo: view.leadingAnchor)
@@ -152,15 +160,28 @@ final class InspectorRootViewController: UIViewController {
         guard presentedViewController == nil else { return }
         appKeyWindow = view.window?.windowScene?.keyWindow
         weak var sheet: UIViewController?
-        let list = UIHostingController(rootView: ComponentListView(session: session, reveal: {
+        func lower(to detent: UISheetPresentationController.Detent.Identifier) {
             guard let controller = sheet?.sheetPresentationController else { return }
-            controller.animateChanges { controller.selectedDetentIdentifier = .medium }
+            controller.animateChanges { controller.selectedDetentIdentifier = detent }
+        }
+        let list = UIHostingController(rootView: ComponentListView(session: session, model: ComponentListModel(), reveal: {
+            lower(to: .medium)
+        }, pick: { [weak self] picked in
+            guard let self else { return picked(nil) }
+            cancelPick()
+            pendingPick = picked
+            lower(to: Self.pickDetent)
+            session.pickPoint { [weak self] point in
+                self?.pendingPick = nil
+                lower(to: .medium)
+                picked(point)
+            }
         }, close: { [weak self] in
             self?.dismissComponentList(animated: true)
         }))
         sheet = list
         if let controller = list.sheetPresentationController {
-            controller.detents = [.medium(), .large()]
+            controller.detents = [.custom(identifier: Self.pickDetent) { _ in 96 }, .medium(), .large()]
             controller.selectedDetentIdentifier = .large
             controller.largestUndimmedDetentIdentifier = .medium
             controller.prefersGrabberVisible = true
@@ -169,7 +190,21 @@ final class InspectorRootViewController: UIViewController {
         present(list, animated: true)
     }
 
+    /// The sheet's height while a point is picked: the rest of the screen takes the tap.
+    private static let pickDetent = UISheetPresentationController.Detent.Identifier("LayoutInspector.pick")
+
+    /// The list's callback while a point is picked; told `nil` when the pick ends without a tap.
+    private var pendingPick: ((CGPoint?) -> Void)?
+
+    fileprivate func cancelPick() {
+        session.pickPoint(nil)
+        let picked = pendingPick
+        pendingPick = nil
+        picked?(nil)
+    }
+
     func dismissComponentList(animated: Bool) {
+        cancelPick()
         guard presentedViewController != nil else { return }
         dismiss(animated: animated)
         restoreAppKeyWindow()
@@ -183,7 +218,13 @@ final class InspectorRootViewController: UIViewController {
 
 extension InspectorRootViewController: UISheetPresentationControllerDelegate {
     func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+        cancelPick()
         restoreAppKeyWindow()
+    }
+
+    /// Dragging the sheet up while picking ends the pick.
+    func sheetPresentationControllerDidChangeSelectedDetentIdentifier(_ sheet: UISheetPresentationController) {
+        if sheet.selectedDetentIdentifier != Self.pickDetent { cancelPick() }
     }
 }
 
@@ -299,6 +340,7 @@ struct InspectorToolbar: View {
                 Button { session.resetRenderCounts() } label: {
                     Label("Reset counts", systemImage: "arrow.counterclockwise")
                 }
+                Toggle(isOn: $session.showsZeroRenders) { Label("Show zeros", systemImage: "circle.dashed") }
             }
             Section {
                 Button { session.window?.root.presentComponentList() } label: {

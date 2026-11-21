@@ -1,4 +1,5 @@
 #if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
+import SwiftUI
 import UIKit
 internal import LayoutInspectorAttributeGraph
 
@@ -9,51 +10,128 @@ struct GraphView {
     /// The node that holds the view's value (the struct its parent built).
     let valueNode: UInt32
     let type: Any.Type
-    /// Where SwiftUI placed the first view of its body, in the space `_ViewDebug` reports positions in. Only used to
-    /// order views of one type.
-    let origin: CGPoint?
 }
 
 /// Finds the AttributeGraph views behind the components of a capture.
 ///
-/// Views of one type in a host are paired by position: top to bottom, then leading to trailing, in the capture and in
-/// the graph. The order of AttributeGraph's children can't be used: rows of a `ForEach` come in a different order on
-/// iOS 26 than on iOS 27. When the numbers differ (a view the capture could not place), every component of the type
-/// gets all of the type's views.
+/// The graph often holds more views of a type than the capture shows (rows of a lazy stack off screen, hidden copies),
+/// and lists them in an order of its own (rows of a `ForEach` come in another order on iOS 26 than on iOS 27). A
+/// component is matched to the view built with the texts it shows: a design-system text component built with
+/// "Payment 3" is the one whose `Text` says so. Views no text tells apart pair up with the components left, in screen
+/// order, when there are as many of both; otherwise the components share those views' total.
 enum ComponentGraph {
     struct Match {
-        /// One view when the component was told apart, otherwise every view of its type in its host.
+        /// One view when the component was told apart, otherwise the views of its type it couldn't be told from.
         let views: [GraphView]
         var isExact: Bool { views.count == 1 }
     }
 
     /// Matches for the components of `capture`, by ``InspectorNode/id``. Empty when the graph can't be reached (iOS 18).
+    /// Worked out once per capture.
     static func match(_ capture: InspectorCapture) -> [Int: Match] {
-        var result: [Int: Match] = [:]
+        if let cached = matchCache, cached.capture === capture { return cached.result }
+        let result = freshMatch(capture)
+        matchCache = (capture, result)
+        return result
+    }
+
+    private static var matchCache: (capture: InspectorCapture, result: [Int: Match])?
+    private static var viewsCache: (capture: InspectorCapture, result: [String: [GraphView]])?
+
+    private static func freshMatch(_ capture: InspectorCapture) -> [Int: Match] {
+        let views = views(in: capture)
+        guard !views.isEmpty else { return [:] }
+        var components: [String: [InspectorNode]] = [:]
         for root in capture.swiftUIRoots {
-            guard let host = root.anchor.view else { continue }
-            let views = views(of: host)
-            guard !views.isEmpty else { continue }
-            var components: [String: [InspectorNode]] = [:]
             root.forEach { if $0.kind == .component { components[$0.typeName, default: []].append($0) } }
-            for (type, nodes) in components {
-                guard let instances = views[type], !instances.isEmpty else { continue }
-                if nodes.count == instances.count {
-                    let placed = nodes.map { ($0, $0.anchor.resolve(in: host) ?? $0.frame) }.sorted { before($0.1.origin, $1.1.origin) }
-                    let views = instances.allSatisfy { $0.origin != nil }
-                        ? instances.sorted { before($0.origin!, $1.origin!) }
-                        : instances.sorted { $0.valueNode < $1.valueNode }
-                    for ((node, _), view) in zip(placed, views) { result[node.id] = Match(views: [view]) }
+        }
+        var result: [Int: Match] = [:]
+        for (type, nodes) in components {
+            guard var left = views[type], !left.isEmpty else { continue }
+            var unmatched: [InspectorNode] = []
+            if left.count == 1, nodes.count == 1 {
+                result[nodes[0].id] = Match(views: left)
+                continue
+            }
+            // By text: the view whose own strings cover most of the component's texts, when that view is the only one.
+            var strings = left.map(Self.strings(of:))
+            for node in nodes.sorted(by: { $0.id < $1.id }) {
+                let texts = Self.texts(in: node)
+                guard !texts.isEmpty else { unmatched.append(node); continue }
+                let overlaps = strings.map { $0.intersection(texts).count }
+                let best = overlaps.max() ?? 0
+                let tied = overlaps.indices.filter { overlaps[$0] == best }
+                if best > 0, tied.count == 1 {
+                    result[node.id] = Match(views: [left.remove(at: tied[0])])
+                    strings.remove(at: tied[0])
+                } else if best > 0 {
+                    // Built with the same texts (a hidden copy, two identical labels): one total for those views.
+                    result[node.id] = Match(views: tied.map { left[$0] })
                 } else {
-                    for node in nodes { result[node.id] = Match(views: instances) }
+                    unmatched.append(node)
                 }
             }
+            guard !unmatched.isEmpty, !left.isEmpty else { continue }
+            // Nothing tells the rest apart, and the graph's order isn't the screen's: one total for them, rather than
+            // counts that look exact on the wrong view.
+            for node in unmatched { result[node.id] = Match(views: left) }
         }
         return result
     }
 
-    private static func before(_ a: CGPoint, _ b: CGPoint) -> Bool {
-        abs(a.y - b.y) > 0.5 ? a.y < b.y : a.x < b.x
+    /// The strings of the texts inside a component.
+    static func texts(in node: InspectorNode) -> Set<String> {
+        var result = Set<String>()
+        node.forEach { if let string = $0.info.text?.string, !string.isEmpty { result.insert(string) } }
+        return result
+    }
+
+    /// The strings a view was built with, two levels deep (`title`, `line.title`), and the numbers as text: a text
+    /// often shows one (`"$\(amount)"`).
+    static func strings(of view: GraphView) -> Set<String> {
+        guard let value = value(of: view) else { return [] }
+        var result = Set<String>()
+        func collect(_ value: Any, depth: Int) {
+            for child in Mirror(reflecting: value).children {
+                switch child.value {
+                case let string as String: if !string.isEmpty { result.insert(string) }
+                // Small numbers ("0", "1") are in every badge and index: they would tie a view to the wrong texts.
+                case let number as any BinaryInteger where !(-9...9).contains(Int(number)): result.insert("\(number)")
+                default: if depth < 2 { collect(child.value, depth: depth + 1) }
+                }
+            }
+        }
+        collect(value, depth: 0)
+        // Texts that show a number with a prefix or suffix ("$40", "40 %") match by the number.
+        return result.union(result.compactMap { Int($0) == nil ? nil : $0 }.flatMap { [$0, "$\($0)", "\($0) %"] })
+    }
+
+    /// App views of every hosting view of the capture's window, by type: the view types of a screen can be declared in
+    /// the AttributeGraph tree of another host (the root host around a navigation stack).
+    static func views(in capture: InspectorCapture) -> [String: [GraphView]] {
+        if let cached = viewsCache, cached.capture === capture { return cached.result }
+        var hosts: [UIView] = []
+        for root in capture.swiftUIRoots {
+            guard let host = root.anchor.view else { continue }
+            let all = host.window.map { LayoutCapture.visibleHostingViews(in: $0, excluding: []) } ?? [host]
+            for candidate in all where !hosts.contains(where: { $0 === candidate }) { hosts.append(candidate) }
+        }
+        var result: [String: [GraphView]] = [:]
+        var seen = Set<UInt32>()
+        for host in hosts {
+            for (name, views) in views(of: host) {
+                // A tree can include a nested host's elements: each view once.
+                let fresh = views.filter { seen.insert($0.valueNode).inserted }
+                result[name, default: []] += fresh
+            }
+        }
+        viewsCache = (capture, result)
+        return result
+    }
+
+    /// Types of the capture's app views that are `ViewModifier`s, by full type name.
+    static func modifierTypes(in capture: InspectorCapture) -> Set<String> {
+        Set(views(in: capture).compactMap { name, views in views.first.map { $0.type is any ViewModifier.Type } == true ? name : nil })
     }
 
     /// Every app view under `host`, by type.
@@ -70,10 +148,9 @@ enum ComponentGraph {
                 let name = TypeNames.qualifiedName(of: type)
                 if TypeNames.isAppType(name) {
                     let n = Int(nodes.withUnsafeMutableBufferPointer { LIAGTreeElementGetNodes(element, $0.baseAddress!, Int32($0.count)) })
-                    if n > 0 {
-                        result[name, default: []].append(GraphView(nodes: Array(nodes[0..<n]), valueNode: LIAGTreeElementGetValue(element),
-                                                                   type: type, origin: origin(below: element)))
-                    }
+                    // Modifiers often own no nodes of their own; they are listed all the same.
+                    result[name, default: []].append(GraphView(nodes: Array(nodes[0..<max(n, 0)]),
+                                                               valueNode: LIAGTreeElementGetValue(element), type: type))
                 }
             }
             guard depth < 400 else { return }
@@ -83,29 +160,6 @@ enum ComponentGraph {
         }
         visit(root, depth: 0)
         return result
-    }
-
-    /// The recorded position of the first element at or below `element` that has one, depth first.
-    private static func origin(below element: LIAGTreeElement) -> CGPoint? {
-        var children = [LIAGTreeElement?](repeating: nil, count: 64)
-        func find(_ element: LIAGTreeElement, depth: Int) -> CGPoint? {
-            var type: UnsafeRawPointer?
-            let attribute = LIAGTreeElementGetValueNamed(element, "position", &type)
-            if attribute != 0, let type, let value = LIAGGraphGetValue(attribute, type) {
-                func size<T>(_: T.Type) -> Int { MemoryLayout<T>.size }
-                // `ViewOrigin` and `CGPoint` both start with the point.
-                if _openExistential(unsafeBitCast(type, to: Any.Type.self), do: size) >= MemoryLayout<CGPoint>.size {
-                    return value.loadUnaligned(as: CGPoint.self)
-                }
-            }
-            guard depth < 12 else { return nil }
-            let n = Int(children.withUnsafeMutableBufferPointer { LIAGTreeElementGetChildren(element, $0.baseAddress!, Int32($0.count)) })
-            for child in children[0..<n].compactMap({ $0 }).reversed() {
-                if let point = find(child, depth: depth + 1) { return point }
-            }
-            return nil
-        }
-        return find(element, depth: 0)
     }
 
     /// The view's current value, as its parent built it. `nil` when the graph can't be read.

@@ -16,6 +16,10 @@ public struct InspectorRenderOptions {
     public var cardBottomInset: CGFloat = 40
     /// Body evaluations per component in ``LayoutInspector/Mode/rerenders``; `nil` until the first count.
     var renderCounts: RenderCounts?
+    /// Re-renders: mark the views whose body didn't run too.
+    var showsZeroRenders = false
+    /// Where the info card goes instead of being drawn (the live overlay shows it as a panel of its own).
+    var card: InspectorCard?
 
     public init(mode: LayoutInspector.Mode = .components) { self.mode = mode }
 
@@ -60,6 +64,16 @@ enum Palette {
         default: neutral
         }
     }
+}
+
+/// The info card of the last drawing (lint list, measure hint, re-render summary); `nil` when the mode has none.
+final class InspectorCard {
+    struct Content: Equatable {
+        let title: String
+        let lines: [String]
+    }
+
+    var content: Content?
 }
 
 /// Draws a capture into a `CGContext`. Used both by the live overlay and by snapshot tests.
@@ -647,6 +661,10 @@ struct InspectorRenderer {
     }
 
     func card(_ ctx: CGContext, title: String, lines: [String]) {
+        if let card = options.card {
+            card.content = InspectorCard.Content(title: title, lines: lines)
+            return
+        }
         let titleFont = UIFont.systemFont(ofSize: 12, weight: .bold)
         let font = UIFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .medium)
         let width = bounds.width - 24
