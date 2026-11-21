@@ -29,6 +29,7 @@ struct WalletBalance: View {
 
 struct InboxBadge: View {
     let model: RerenderModel
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack {
@@ -37,7 +38,7 @@ struct InboxBadge: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(.orange.opacity(0.15), in: Capsule())
+        .background(.orange.opacity(colorScheme == .dark ? 0.3 : 0.15), in: Capsule())
     }
 }
 
@@ -67,10 +68,14 @@ struct HintFooter: View {
 
 struct TapCounter: View {
     @State private var taps = 0
+    @State private var label = "Tapped"
 
     var body: some View {
-        Button("Tapped \(taps) times") { taps += 1 }
-            .buttonStyle(.bordered)
+        HStack(spacing: 8) {
+            Image(systemName: "hand.tap")
+            Button("\(label) \(taps) times") { taps += 1 }
+                .buttonStyle(.bordered)
+        }
     }
 }
 
@@ -99,6 +104,7 @@ struct RerenderScreen: View {
                 .buttonStyle(.borderedProminent)
                 Toggle("Tick balance every 0.2 s", isOn: $ticking)
                 HintFooter(text: "Turn on Dev → Re-renders: only the views that read a changed property heat up.")
+                    .dynamicTypeSize(.xxLarge)
             }
             .padding(20)
         }

@@ -142,6 +142,49 @@ final class InspectorRootViewController: UIViewController {
     @objc private func tap(_ gesture: UITapGestureRecognizer) {
         session.handleTap(at: gesture.location(in: view))
     }
+
+    /// The app's key window before the list's search field made this window key.
+    private weak var appKeyWindow: UIWindow?
+
+    /// Dev → Components list, as a sheet in the inspector's window. At the medium height the screen above stays
+    /// undimmed, so a selected component can be seen.
+    func presentComponentList() {
+        guard presentedViewController == nil else { return }
+        appKeyWindow = view.window?.windowScene?.keyWindow
+        weak var sheet: UIViewController?
+        let list = UIHostingController(rootView: ComponentListView(session: session, reveal: {
+            guard let controller = sheet?.sheetPresentationController else { return }
+            controller.animateChanges { controller.selectedDetentIdentifier = .medium }
+        }, close: { [weak self] in
+            self?.dismissComponentList(animated: true)
+        }))
+        sheet = list
+        if let controller = list.sheetPresentationController {
+            controller.detents = [.medium(), .large()]
+            controller.selectedDetentIdentifier = .large
+            controller.largestUndimmedDetentIdentifier = .medium
+            controller.prefersGrabberVisible = true
+            controller.delegate = self
+        }
+        present(list, animated: true)
+    }
+
+    func dismissComponentList(animated: Bool) {
+        guard presentedViewController != nil else { return }
+        dismiss(animated: animated)
+        restoreAppKeyWindow()
+    }
+
+    private func restoreAppKeyWindow() {
+        if let window = appKeyWindow, !window.isHidden, window !== view.window { window.makeKey() }
+        appKeyWindow = nil
+    }
+}
+
+extension InspectorRootViewController: UISheetPresentationControllerDelegate {
+    func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+        restoreAppKeyWindow()
+    }
 }
 
 /// The pill's place on screen, shared by every inspector and kept between launches. Stored relative to the screen
@@ -256,6 +299,12 @@ struct InspectorToolbar: View {
                 Button { session.resetRenderCounts() } label: {
                     Label("Reset counts", systemImage: "arrow.counterclockwise")
                 }
+            }
+            Section {
+                Button { session.window?.root.presentComponentList() } label: {
+                    Label("Components list", systemImage: "list.bullet.indent")
+                }
+                .disabled(session.capture == nil)
             }
         } label: {
             if session.isHighlighting && mode.isDevelopmentTool {

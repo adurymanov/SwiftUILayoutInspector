@@ -153,28 +153,7 @@ final class RenderProfiler {
 
     /// The graph nodes of every app view under `host`, by type, in the order SwiftUI declares the views.
     static func viewNodes(of host: UIView) -> [String: [[UInt32]]] {
-        guard isAvailable, let subgraph = AttributeGraphTree.rootSubgraph(of: host),
-              let root = LIAGSubgraphGetTreeRoot(subgraph) else { return [:] }
-        var result: [String: [[UInt32]]] = [:]
-        var children = [LIAGTreeElement?](repeating: nil, count: 1024)
-        // Generous: a view's body node can come after every node of a long modifier chain.
-        var nodes = [UInt32](repeating: 0, count: 1024)
-        func visit(_ element: LIAGTreeElement, depth: Int) {
-            if let meta = LIAGTreeElementGetType(element) {
-                let name = TypeNames.qualifiedName(of: unsafeBitCast(meta, to: Any.Type.self))
-                if TypeNames.isAppType(name) {
-                    let n = Int(nodes.withUnsafeMutableBufferPointer { LIAGTreeElementGetNodes(element, $0.baseAddress!, Int32($0.count)) })
-                    if n > 0 { result[name, default: []].append(Array(nodes[0..<n])) }
-                }
-            }
-            guard depth < 400 else { return }
-            let n = Int(children.withUnsafeMutableBufferPointer { LIAGTreeElementGetChildren(element, $0.baseAddress!, Int32($0.count)) })
-            // AttributeGraph lists the newest child first: walked backwards, the views come in the order of the capture.
-            let list = children[0..<n].compactMap { $0 }
-            for child in list.reversed() { visit(child, depth: depth + 1) }
-        }
-        visit(root, depth: 0)
-        return result
+        ComponentGraph.views(of: host).mapValues { $0.map(\.nodes) }
     }
 }
 
@@ -197,23 +176,7 @@ final class RenderHeatmap {
         guard mappedCapture !== capture else { return }
         let start = CACurrentMediaTime()
         mappedCapture = capture
-        slots = []
-        for root in capture.swiftUIRoots {
-            guard let host = root.anchor.view else { continue }
-            let viewNodes = RenderProfiler.viewNodes(of: host)
-            var components: [String: [InspectorNode]] = [:]
-            root.forEach { if $0.kind == .component { components[$0.typeName, default: []].append($0) } }
-            for (type, nodes) in components {
-                guard let instances = viewNodes[type], !instances.isEmpty else { continue }
-                let ordered = nodes.sorted { $0.id < $1.id }
-                if ordered.count == instances.count {
-                    for (node, owned) in zip(ordered, instances) { slots.append((node.id, owned, 1)) }
-                } else {
-                    let all = instances.flatMap { $0 }
-                    for node in ordered { slots.append((node.id, all, instances.count)) }
-                }
-            }
-        }
+        slots = ComponentGraph.match(capture).map { id, match in (id, match.views.flatMap(\.nodes), match.views.count) }
         wanted = Set(slots.flatMap(\.nodes))
         lastMapDuration = CACurrentMediaTime() - start
     }

@@ -7,14 +7,25 @@ import UIKit
 enum CaptureJSON {
     static let schemaVersion = 1
 
+    /// Component properties hold app data, so they go to disk only when asked for: `LAYOUT_INSPECTOR_PROPERTIES=1`.
+    static var includesProperties = ProcessInfo.processInfo.environment["LAYOUT_INSPECTOR_PROPERTIES"] == "1"
+
     /// `space` – the view the node frames were last resolved in (window points for the inspector on screen).
     /// `renderCounts` – body runs while Re-renders is on (`renders` of a component).
     static func object(for capture: InspectorCapture, rules: LayoutInspector.LintRules, bounds: CGRect, space: UIView?,
                        renderCounts: RenderCounts? = nil) -> [String: Any] {
         var nodes: [[String: Any]] = []
+        let graphViews = includesProperties && capture.swiftUINodes.contains { $0.kind == .component } ? ComponentGraph.match(capture) : [:]
         func visit(_ node: InspectorNode, tree: String, component: String?) {
             var o = describe(node, tree: tree, component: component)
             if let entry = renderCounts?.byNode[node.id] { o["renders"] = ["count": entry.count, "views": entry.instances] }
+            if let match = graphViews[node.id], match.isExact, let view = match.views.first, let value = ComponentGraph.value(of: view) {
+                o["properties"] = ComponentDetails.properties(of: value).map { property -> [String: Any] in
+                    var p: [String: Any] = ["name": property.name, "kind": property.kind.rawValue, "type": property.type]
+                    if let value = property.value { p["value"] = value }
+                    return p
+                }
+            }
             nodes.append(o)
             let inner = node.kind == .component ? node.title : component
             for child in node.children { visit(child, tree: tree, component: inner) }
@@ -32,6 +43,9 @@ enum CaptureJSON {
             "nodes": nodes,
             "lint": lint,
         ]
+        if let host = capture.swiftUIRoots.first {
+            object["environment"] = Dictionary(ComponentDetails.environment(of: host).map { ($0.name, $0.value) }) { a, _ in a }
+        }
         if let space {
             object["space"] = ["width": round(space.bounds.width), "height": round(space.bounds.height),
                                "scale": space.window?.screen.scale ?? UIScreen.main.scale] as [String: Any]

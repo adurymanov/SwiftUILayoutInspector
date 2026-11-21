@@ -70,7 +70,7 @@ last: when it names a capture, the other two files already hold that capture.
 ```json
 {
   "schemaVersion": 1,
-  "library": "0.2.7",
+  "library": "0.2.8",
   "updated": 1795275048.79,
   "app": { "bundleID": "dev.layoutinspector.example", "process": "InspectorDemo", "pid": 32529, "launchID": "23A0…" },
   "enabled": true,
@@ -94,7 +94,7 @@ last: when it names a capture, the other two files already hold that capture.
 ```json
 {
   "schemaVersion": 1,
-  "library": "0.2.7",
+  "library": "0.2.8",
   "graph": true,
   "space": { "width": 402, "height": 874, "scale": 3 },
   "capture": { "…": "as in status.json" },
@@ -131,7 +131,11 @@ Present when they apply:
 | `shape`, `fill`, `decorations` | |
 | `uikit` | UIKit views: `className`, `text`, `font`, `color`, `constraints` (Auto Layout as text), `autoLayout`, `ambiguous`, `stackSpacing`, `appView`. |
 | `renders` | Components while the Re-renders mode is on: `count`, how many times the `body` ran since the mode was turned on or reset, and `views`, how many views of the type share that count (1 = this view's own). Counted up to the capture the file belongs to: `li refresh` writes the counts so far. |
+| `properties` | Components told apart from the others of their type: the view's stored properties as its parent built it. Each has `name`, `kind` (`value`, `state`, `binding`, `environment`, `observed`), `type` and, when it can be read, `value` as one line of text. `@State` and `@Environment` have no `value`: SwiftUI keeps them in its own storage. Off by default, because the values are app data written to disk: launch the app with `LAYOUT_INSPECTOR_PROPERTIES=1` (`SIMCTL_CHILD_LAYOUT_INSPECTOR_PROPERTIES=1` with `simctl launch`). |
 | `accessibility` | `identifier`, `label`. The app fills it for UIKit views only: SwiftUI builds its accessibility tree only while an accessibility client is connected, and reading it from inside the app costs too much. `li` reads the simulator's accessibility tree from the Mac (with `simtool` or `axe`) and adds it to SwiftUI nodes by frame; it then also writes the elements to a top-level `accessibility` list (`frame`, `identifier`, `label`, `role`, `node`) and sets `"accessibilitySource": "mac"`. |
+
+The top-level `environment` holds the values layout depends on, from the traits of the first hosting view:
+`colorScheme`, `dynamicTypeSize`, `layoutDirection`, `legibilityWeight`, size classes, `displayScale`, `locale`.
 
 `schemaVersion` changes when a key is removed or renamed or its meaning changes. New keys don't change it.
 

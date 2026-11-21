@@ -211,6 +211,7 @@ final class InspectorSession: ObservableObject {
         setFrontmost(false)
         heatmap?.profiler.stop()
         heatmap = nil
+        window?.root.dismissComponentList(animated: false)
         window?.isHidden = true
         window = nil
         capture = nil
@@ -234,6 +235,7 @@ final class InspectorSession: ObservableObject {
             // and the window retains the session. Detaching waits a turn because this can run from the window's own
             // toolbar action.
             if let window {
+                window.root.dismissComponentList(animated: false)
                 window.isHidden = true
                 DispatchQueue.main.async { window.windowScene = nil }
             }
@@ -567,6 +569,13 @@ final class InspectorSession: ObservableObject {
     func select(_ node: InspectorNode?) {
         selectedID = node?.id
         measureTargetID = nil
+    }
+
+    /// Selects `node`, or the same view in a newer capture (matched by type and place, as across refreshes).
+    func select(sameAs node: InspectorNode) {
+        guard let capture else { return }
+        if capture.node(withID: node.id) === node { select(node); return }
+        select(capture.swiftUINodes.first { $0.typeName == node.typeName && $0.anchor.rect == node.anchor.rect })
     }
 }
 

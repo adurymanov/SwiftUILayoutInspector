@@ -35,7 +35,7 @@ and the data comes from the SwiftUI runtime — the same debug graph Xcode's vie
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.7"),
+.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.8"),
 
 .target(name: "App", dependencies: [
     .product(name: "LayoutInspector", package: "SwiftUILayoutInspector"),
@@ -166,7 +166,7 @@ Repeated issues (rows of a `ForEach`) are merged into one line with a counter.
 The controls are a round glass button (a material before iOS 26) that can be dragged anywhere; it remembers
 its place. A tap opens the menu: the layout modes, a Dev submenu, Refresh, Share report (a text layout
 report), Labels, Grid and Close. Dev holds the tools for working on views rather than checking their layout:
-UIKit and Re-renders. With `highlightsOnAppear: false` a screen is not captured until a mode is picked there, so nothing is
+UIKit, Re-renders and the Components list. With `highlightsOnAppear: false` a screen is not captured until a mode is picked there, so nothing is
 computed while navigating; the button shows the capture's progress.
 
 ### Re-renders
@@ -193,6 +193,28 @@ When views of one type can't be told apart (the capture shows a different number
 they share their total, labelled `Σ12/3`: twelve runs of three views. On iOS 18 the inspector can't reach the
 view graph, so the mode shows a note instead of counts.
 
+### Components list
+
+Dev → Components list opens a sheet with the app's views on the current screen, nested as on screen, each with
+its frame and, while Re-renders is on, its count. Search by name or type. A tap on a row outlines the view on
+screen and lowers the sheet so it can be seen; Share sends the list as text.
+
+The info button shows what the overlay doesn't draw:
+
+- the view's properties as its parent built it, read from SwiftUI's graph: `index: 1`,
+  `quote: Quote(price: 80)`;
+- `@State`, `@Binding`, `@Environment` and observed objects by name and type. A binding shows its value. `@State`
+  and `@Environment` values live in SwiftUI's own storage, so they show only their names;
+- the fonts of the texts inside;
+- the environment layout depends on, from the window's traits: color scheme, Dynamic Type size, layout direction,
+  legibility weight, size classes, display scale, locale. Values set with `.environment(…)` inside the screen are
+  not shown: SwiftUI records them only with its environment debug bit, which makes every capture 8–14 % slower.
+
+Nothing is read until the sheet is open. Views of one type that can't be told apart show no properties. On
+iOS 18 the graph can't be reached, so the details have the frame, fonts and environment only. `capture.json` gets a
+top-level `environment`, and the same `properties` per component when the app runs with
+`LAYOUT_INSPECTOR_PROPERTIES=1` (they are app data written to disk, so they are off by default).
+
 ## Turning it off
 
 - **One view:** `isEnabled: false` or `configuration.isEnabled = false`. Nothing is captured or drawn.
@@ -203,7 +225,7 @@ view graph, so the mode shows a note instead of counts.
   API:
 
   ```swift
-  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.7", traits: []),
+  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.8", traits: []),
   ```
 
   Package traits apply to every build configuration. To keep the inspector in Debug and drop it from Release,

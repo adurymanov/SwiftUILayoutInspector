@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.8
+
+- Dev → Components list: a sheet with the app's views on the screen, nested as on screen, with frames and
+  re-render counts, and a search field. A tap outlines the view and lowers the sheet; Share sends the list as text.
+- Details of a view: its properties as its parent built it (read from SwiftUI's graph), `@State`, `@Binding`,
+  `@Environment` and observed objects, the fonts inside, and the window's environment that layout depends on.
+- `capture.json` gets a top-level `environment`, and `properties` for components with
+  `LAYOUT_INSPECTOR_PROPERTIES=1`.
+- Fixed: on iOS 26 the Re-renders count of one row of a `ForEach` could land on another row. Views of one type are
+  now paired by position instead of by the order AttributeGraph lists them.
+
 ## 0.2.7
 
 - The menu has a Dev submenu for tools that help build views rather than check their layout. UIKit moved
