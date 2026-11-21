@@ -21,16 +21,22 @@ import os
 /// The inspected view is not changed: the overlay and the toolbar live in a separate window above the app,
 /// and the data comes from the SwiftUI runtime. Everything happens on the main thread.
 public enum LayoutInspector {
+    /// Version of the library, as tagged. Written into the report files, so tools can tell what they read.
+    public static let version = "0.2.6"
+
     /// Turns the inspector on for this process. Call it once, before the first SwiftUI view of the app is
     /// created – not just before the inspected one: `App.init`, or
     /// `application(_:willFinishLaunchingWithOptions:)` before the first `UIHostingController`.
     ///
-    /// It does two things:
+    /// It does three things:
     /// - sets the environment variable `SWIFTUI_VIEW_DEBUG=27`. SwiftUI reads it once per process, when it
     ///   creates its first view graph, and from then on records a debug tree for every view: types, values
     ///   (paddings, frames, spacing, text attributes), positions and sizes – the data Xcode's view debugger
     ///   reads. Setting the variable in the scheme has the same effect;
-    /// - sets the master switch ``isEnabled``.
+    /// - sets the master switch ``isEnabled``;
+    /// - starts listening to commands from the Mac (Darwin notifications, see `Docs/Agents.md`): a script or an agent
+    ///   switches modes in the simulator with `xcrun simctl spawn <udid> notifyutil -p dev.layoutinspector.mode.spacing`
+    ///   and reads the report files the inspector then writes after every capture.
     ///
     /// A call after SwiftUI has created a view is too late: the variable is not set,
     /// ``isSwiftUIGraphRecordingEnabled`` stays `false` and a warning is logged. The inspector then only sees
@@ -44,6 +50,7 @@ public enum LayoutInspector {
     public static func bootstrap(isEnabled: Bool = true) {
         self.isEnabled = isEnabled
         #if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
+        if isEnabled { AgentControl.startListening() }
         guard isEnabled, getenv(debugEnvironmentKey) == nil else { return }
         if let host = SwiftUIGraphReader.existingHostingView() {
             GlobalState.shared.isBootstrapTooLate = true

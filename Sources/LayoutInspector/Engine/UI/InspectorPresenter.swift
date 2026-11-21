@@ -38,7 +38,14 @@ final class InspectorPresenter {
 
     var isWindowInspectorVisible: Bool { windowSession != nil }
 
+    /// The whole-window session, if it is shown.
+    var windowSessionIfAny: InspectorSession? { windowSession }
+
+    /// What the window inspector was last shown with: a command from the Mac shows it again the same way.
+    private(set) var lastWindowConfiguration: LayoutInspector.Configuration?
+
     func showWindowInspector(_ configuration: LayoutInspector.Configuration) {
+        lastWindowConfiguration = configuration
         if let windowSession {
             windowSession.apply(configuration)
             return

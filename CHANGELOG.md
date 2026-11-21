@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.6
+
+- Commands from the Mac: an app that calls `bootstrap()` switches modes, refreshes and closes the inspector on
+  Darwin notifications (`dev.layoutinspector.mode.spacing`, or scoped to one app with its bundle id). A mode
+  command shows a closed inspector again.
+- Report files after every capture, once the app got a command (or in previews, or with
+  `LAYOUT_INSPECTOR_REPORTS=1`): `report.txt`, `capture.json` (every node with its facts, versioned schema) and
+  `status.json`, written atomically off the main thread into a folder the Mac reads directly.
+- `LayoutInspector.snapshot(_:)` captures a view without an app and gives the report, the JSON and images.
+- `Tools/li`, a CLI for agents and scripts: modes with no taps, `query` and `measure` on the captured numbers, and
+  `preview` for a `#Preview` through headless Xcode. `Docs/Agents.md` documents all of it.
+- `LayoutInspector.version`.
+
 ## 0.1.3
 
 - The compilation condition `LAYOUT_INSPECTOR_DISABLED` compiles the engine out like a disabled

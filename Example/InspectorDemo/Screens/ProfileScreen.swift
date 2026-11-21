@@ -153,3 +153,14 @@ struct FlowLayout: Layout {
         return rows
     }
 }
+
+#Preview("Profile") {
+    NavigationStack { ProfileScreen() }
+}
+
+#Preview("Header", traits: .sizeThatFitsLayout) {
+    ProfileHeader(profile: Profile(
+        name: "Anna Petrova", handle: "@anna.designs", city: "Berlin", initials: "AP", stats: [], bio: "", tags: []
+    ))
+    .padding()
+}

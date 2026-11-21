@@ -86,6 +86,8 @@ final class InspectorSession: ObservableObject {
     private var jobShowsProgress = false
     /// The layout the capture in flight started from: a change during the capture triggers the next one.
     private var jobSignature = 0
+    /// The number of the last command from the Mac when the capture in flight started (see `AgentControl`).
+    private var jobCommand = 0
     private var stepScheduled = false
     private var cachedReport: (capture: ObjectIdentifier, text: String)?
 
@@ -255,6 +257,7 @@ final class InspectorSession: ObservableObject {
         cancelCapture()
         isHighlighting = true
         let signature = LayoutCapture.layoutSignature(of: target, excluding: excluded)
+        jobCommand = AgentControl.commandCount
         finish(LayoutCapture.capture(target, excluding: excluded), signature: signature)
     }
 
@@ -265,6 +268,7 @@ final class InspectorSession: ObservableObject {
         guard let target, isHighlighting else { return }
         job = LayoutCapture.Job(root: target, excluding: excluded)
         jobSignature = LayoutCapture.layoutSignature(of: target, excluding: excluded)
+        jobCommand = AgentControl.commandCount
         jobStart = CACurrentMediaTime()
         jobShowsProgress = requested
         captureProgress = requested ? 0 : nil
@@ -280,6 +284,14 @@ final class InspectorSession: ObservableObject {
     func highlight(_ mode: LayoutInspector.Mode) {
         configuration.mode = mode
         guard !isHighlighting else { return }
+        isHighlighting = true
+        beginCapture()
+    }
+
+    /// A command from the Mac: highlight in `mode` and capture again, even if the screen is highlighted already, so the
+    /// report files describe the screen as it is now.
+    func agentHighlight(_ mode: LayoutInspector.Mode) {
+        configuration.mode = mode
         isHighlighting = true
         beginCapture()
     }
@@ -338,6 +350,7 @@ final class InspectorSession: ObservableObject {
             selectedID = match?.id
         }
         overlay.capture = capture
+        AgentReports.didFinish(capture, session: self, afterCommand: jobCommand)
     }
 
     var selectedNode: InspectorNode? { selectedID.flatMap { capture?.node(withID: $0) } }

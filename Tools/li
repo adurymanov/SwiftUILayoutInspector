@@ -1,0 +1,1304 @@
+#!/usr/bin/env python3
+"""li - drive SwiftUILayoutInspector from the Mac and read its measurements as data.
+
+Simulator (the app runs a Debug build that calls LayoutInspector.bootstrap()):
+  li <mode> [--device UDID] [--bundle ID] [--out DIR] [--timeout S] [--no-screenshot]
+        modes: components spacing fonts constraints uikit lint measure (`li mode measure` for the
+        Measure mode itself; `li measure A B` measures)
+        Switches the inspector to <mode>, waits for a fresh capture and copies report.txt, capture.json,
+        status.json and a screenshot into one folder. No taps. --ax auto|on|off: merge the simulator's
+        accessibility tree (ids, labels) into capture.json; auto = when simtool or axe is installed.
+  li off | refresh | close | status [--device UDID] [--bundle ID]
+  li query SELECTOR [--all] [--json]       one element: frame, font, paddings, gaps, neighbours
+  li measure SELECTOR [SELECTOR] [--json]  distance between two elements, as the Measure mode draws it;
+                                            with one, the insets inside its container
+  li dirs                                   report folders on this Mac
+
+  SELECTOR: --text T | --id ID | --label L | --type NAME | --node N, or for measure a bare string
+            "text:Hello", "id:login.button", "label:Close", "type:ProfileHeader", "node:123"
+            (a bare string without a prefix is a text, then an accessibility id). --index N picks the N-th
+            match (0-based); for measure, --index-b picks among the matches of B. query and measure read the
+            latest capture of --device, or --dir / --file.
+  --reports-dir DIR (or $LI_REPORTS_DIR for the root): where the app writes status.json when that is not
+            ~/Library/Caches/LayoutInspector/<udid>/<bundle>, e.g. an app launched with LAYOUT_INSPECTOR_DUMP.
+
+Xcode previews (headless Xcode, no Xcode window; needs the library 0.2.6+ linked by the file's module):
+  exec li bridge                            start the MCP bridge first, from the agent's own shell (see below)
+  li preview FILE --list
+  li preview FILE (--preview NAME | --index N | --view 'EXPR') [--mode spacing,fonts] [--size 402x874|fit]
+        [--setup 'SWIFT'] [--import M1,M2] [--workspace PATH] [--scheme NAME] [--out DIR] [--stable-timeout S]
+        [--no-queue] [--timeout S] [--queue-timeout S]
+
+Device: --device (udid or name), else $LI_DEVICE, else $SIMULATOR_UDID, else the only booted simulator.
+Exit codes: 0 ok, 1 usage or not found, 2 environment problem, 3 timeout.
+"""
+import base64
+import glob
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+
+LI_VERSION = "0.2.6"
+SCHEMA_VERSION = 1
+PREFIX = "dev.layoutinspector."
+MODES = ["components", "spacing", "typography", "constraints", "uikit", "lint", "measure"]
+MODE_ALIASES = {"fonts": "typography", "font": "typography", "typo": "typography"}
+CONTENT_KINDS = {"text", "image", "control", "shape", "color", "divider", "platform"}
+REPORTS_ROOT = os.environ.get("LI_REPORTS_DIR") or os.path.expanduser("~/Library/Caches/LayoutInspector")
+
+
+class Fail(Exception):
+    def __init__(self, message, code=1):
+        super().__init__(message)
+        self.code = code
+
+
+def warn(message):
+    print("li: " + message, file=sys.stderr)
+
+
+# ---------------------------------------------------------------- arguments
+
+class Args:
+    """Tiny parser: flags with values, boolean flags, positionals."""
+
+    BOOL = {"--all", "--json", "--no-screenshot", "--list", "--no-queue", "--force"}
+
+    def __init__(self, argv):
+        self.pos, self.opt = [], {}
+        i = 0
+        while i < len(argv):
+            a = argv[i]
+            if a in self.BOOL:
+                self.opt[a] = True
+                i += 1
+            elif a.startswith("--") and "=" in a:
+                k, v = a.split("=", 1)
+                self.opt[k] = v
+                i += 1
+            elif a.startswith("--"):
+                if i + 1 >= len(argv):
+                    raise Fail("%s needs a value" % a)
+                self.opt[a] = argv[i + 1]
+                i += 2
+            else:
+                self.pos.append(a)
+                i += 1
+
+    def get(self, key, default=None):
+        return self.opt.get(key, default)
+
+    def flag(self, key):
+        return bool(self.opt.get(key))
+
+
+# ---------------------------------------------------------------- simulator
+
+def run(cmd, timeout=30, check=True):
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise Fail("%s did not finish in %ss" % (" ".join(cmd[:4]), timeout), 3)
+    except FileNotFoundError:
+        raise Fail("%s not found; Xcode command line tools are required" % cmd[0], 2)
+    if check and p.returncode != 0:
+        raise Fail("%s failed: %s" % (" ".join(cmd[:5]), (p.stderr or p.stdout).strip()[:500]), 2)
+    return p
+
+
+def booted_devices():
+    p = run(["xcrun", "simctl", "list", "devices", "booted", "-j"], timeout=30)
+    devices = []
+    for runtime, items in json.loads(p.stdout).get("devices", {}).items():
+        for d in items:
+            if d.get("state") == "Booted":
+                devices.append((d["udid"], d["name"], runtime.rsplit(".", 1)[-1]))
+    return devices
+
+
+def resolve_device(args):
+    udid = args.get("--device") or os.environ.get("LI_DEVICE") or os.environ.get("SIMULATOR_UDID")
+    if udid and not re.fullmatch(r"[0-9A-Fa-f-]{36}", udid):
+        p = run(["xcrun", "simctl", "list", "devices", "-j"], timeout=30)
+        named = [d for items in json.loads(p.stdout).get("devices", {}).values() for d in items if d.get("name") == udid]
+        if not named:
+            raise Fail("no simulator named %r" % udid, 1)
+        booted = [d for d in named if d.get("state") == "Booted"]
+        return (booted or named)[0]["udid"]
+    if udid:
+        return udid
+    booted = booted_devices()
+    if len(booted) == 1:
+        return booted[0][0]
+    if not booted:
+        raise Fail("no booted simulator; pass --device UDID", 2)
+    raise Fail("several simulators are booted, pass --device:\n" +
+               "\n".join("  %s  %s (%s)" % b for b in booted), 1)
+
+
+def device_dir(udid):
+    return os.path.join(REPORTS_ROOT, udid)
+
+
+def app_folders(udid, bundle, args=None):
+    """Where the app's status.json is: --reports-dir (an app launched with LAYOUT_INSPECTOR_DUMP, or one that fell
+    back to its container), else the host folder of this simulator."""
+    explicit = args.get("--reports-dir") if args else None
+    if explicit:
+        return [os.path.abspath(explicit)]
+    return [os.path.join(device_dir(udid), bundle)] if bundle else app_dirs(udid)
+
+
+def read_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def app_dirs(udid):
+    """Report folders of apps on this simulator, most recently updated first."""
+    result = []
+    for d in glob.glob(os.path.join(device_dir(udid), "*")):
+        status = os.path.join(d, "status.json")
+        if os.path.isfile(status):
+            result.append((os.path.getmtime(status), d))
+    return [d for _, d in sorted(result, reverse=True)]
+
+
+def notify(udid, name):
+    run(["xcrun", "simctl", "spawn", udid, "notifyutil", "-p", name], timeout=30)
+
+
+def send(udid, bundle, command):
+    name = PREFIX + (bundle + "." if bundle else "") + command
+    notify(udid, name)
+    return name
+
+
+def check_versions(status):
+    lib, schema = status.get("library"), status.get("schemaVersion")
+    if schema is not None and schema != SCHEMA_VERSION:
+        warn("the app writes report schema %s, this li reads %s: fields may be missing or differ" % (schema, SCHEMA_VERSION))
+    elif lib and lib != LI_VERSION:
+        warn("the app has SwiftUILayoutInspector %s, this li is %s" % (lib, LI_VERSION))
+
+
+def wait_for(predicate, timeout, interval=0.1):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(interval)
+    return None
+
+
+def command(udid, bundle, name, wait_capture, timeout, ack_timeout=8, args=None):
+    """Sends a command and waits for the app to acknowledge it (and for the capture that follows)."""
+    before = {}
+    for d in app_folders(udid, bundle, args):
+        s = read_json(os.path.join(d, "status.json")) or {}
+        before[d] = ((s.get("app") or {}).get("launchID"), (s.get("command") or {}).get("number", -1))
+    t0 = time.time() - 0.5
+    sent = send(udid, bundle, name)
+
+    def acked():
+        for d in app_folders(udid, bundle, args):
+            s = read_json(os.path.join(d, "status.json"))
+            c = (s or {}).get("command") or {}
+            if c.get("name") != name or c.get("date", 0) < t0:
+                continue
+            launch, number = before.get(d, (None, -1))
+            if launch == (s.get("app") or {}).get("launchID") and c.get("number", -1) <= number:
+                continue  # an earlier command of the same name, not this one
+            return d, s
+        return None
+
+    hit = wait_for(acked, ack_timeout)
+    if not hit:
+        raise Fail(
+            "no answer to %s within %ss on %s.\n"
+            "  - is the app running in the foreground on this simulator?\n"
+            "  - is it a Debug build that calls LayoutInspector.bootstrap() at launch (library 0.2.6 or later)?\n"
+            "  - an app that turns the inspector on with a switch or a launch argument needs it on for this launch;\n"
+            "    bootstrap(isEnabled: false) does not listen to commands even if isEnabled is set to true later.\n"
+            "  - launched with LAYOUT_INSPECTOR_DUMP, or status.json in the app's own container: pass --reports-dir.\n"
+            "Report folders seen: %s" % (sent, ack_timeout, udid, ", ".join(app_dirs(udid)) or "none"), 3)
+    folder, status = hit
+    check_versions(status)
+    if not status.get("enabled", True):
+        raise Fail("the app answered, but its inspector is switched off (LayoutInspector.isEnabled == false)", 2)
+    if not wait_capture:
+        return folder, status, None
+    if name == "refresh" and (status.get("inspector") or {}).get("kind", "none") == "none":
+        raise Fail("refresh: no inspector on screen to capture; use a mode command (li spacing …), which shows it", 1)
+    number = status["command"]["number"]
+    launch = (status.get("app") or {}).get("launchID")
+
+    def captured():
+        s = read_json(os.path.join(folder, "status.json"))
+        if not s or (s.get("app") or {}).get("launchID") != launch:
+            return None
+        c = s.get("capture") or {}
+        return s if c.get("afterCommand", -1) >= number else None
+
+    t1 = time.time()
+    done = wait_for(captured, timeout)
+    if not done:
+        s = read_json(os.path.join(folder, "status.json")) or {}
+        state = (s.get("inspector") or {})
+        raise Fail("the app took the command but no capture finished within %ss (inspector: %s). A screen that never "
+                   "stops animating is captured at most every 3 s; a cold first capture of a big screen can take 10 s "
+                   "and more. The inspector also skips captures while a sheet or an alert covers it or the app is "
+                   "in the background. Retry with --timeout, or li refresh." % (timeout, json.dumps(state)), 3)
+    done["_waited"] = time.time() - t1
+    return folder, done, time.time()
+
+
+def default_out(udid, label):
+    root = os.path.join(tempfile.gettempdir(), "layout-inspector", udid[:8])
+    path = os.path.join(root, time.strftime("%Y%m%d-%H%M%S-") + label)
+    n = 1
+    while os.path.exists(path + ("" if n == 1 else "-%d" % n)):
+        n += 1
+    return path + ("" if n == 1 else "-%d" % n)
+
+
+def cmd_mode(args, mode):
+    udid = resolve_device(args)
+    bundle = args.get("--bundle")
+    timeout = float(args.get("--timeout", "60"))
+    folder, status, seen_at = command(udid, bundle, "mode." + mode, True, timeout, args=args)
+    out = os.path.abspath(args.get("--out") or default_out(udid, mode))
+    os.makedirs(out, exist_ok=True)
+    copied = []
+    for name in ("report.txt", "capture.json", "status.json"):
+        src = os.path.join(folder, name)
+        if os.path.isfile(src):
+            shutil.copyfile(src, os.path.join(out, name))
+            copied.append(name)
+    ax_note = ""
+    if args.get("--ax", "auto") != "off" and os.path.isfile(os.path.join(out, "capture.json")):
+        elements = read_accessibility(udid)
+        if elements is None:
+            ax_note = "no simtool or axe: accessibility ids and labels are not in capture.json"
+            if args.get("--ax") == "on":
+                raise Fail(ax_note, 2)
+        else:
+            merged = merge_accessibility(read_json(os.path.join(out, "capture.json")), elements)
+            for target in (os.path.join(out, "capture.json"), os.path.join(folder, "capture.ax.json")):
+                with open(target + ".tmp", "w") as f:
+                    json.dump(merged, f)
+                os.replace(target + ".tmp", target)
+            ax_note = "%d accessibility elements, %d matched to nodes" % (
+                len(elements), len([e for e in elements if e.get("node") is not None]))
+    shot = None
+    if not args.flag("--no-screenshot"):
+        shot = os.path.join(out, "screen.png")
+        run(["xcrun", "simctl", "io", udid, "screenshot", shot], timeout=30)
+    cap = status.get("capture") or {}
+    data = read_json(os.path.join(out, "capture.json")) or {}
+    lint = data.get("lint") or []
+    ready = seen_at - (cap.get("date") or seen_at)
+    print("capture #%s  %s  %.0f ms  %s nodes  %d lint issues%s" % (
+        cap.get("number"), cap.get("mode"), (cap.get("duration") or 0) * 1000, cap.get("nodes"), len(lint),
+        "" if cap.get("graph", True) else "  (render tree only: bootstrap() came too late)"))
+    print("files ready %.2f s after the capture ended" % max(0, ready))
+    print("app:    %s (library %s)" % ((status.get("app") or {}).get("bundleID"), status.get("library")))
+    if ax_note:
+        print("ax:     %s" % ax_note)
+    print("out:    %s" % out)
+    for name in copied:
+        print("        %s" % name)
+    if shot:
+        print("        screen.png")
+
+
+def cmd_simple(args, name):
+    udid = resolve_device(args)
+    folder, status, _ = command(udid, args.get("--bundle"), name, name == "refresh", float(args.get("--timeout", "60")),
+                                args=args)
+    if name == "status" or args.flag("--json"):
+        print(json.dumps(status, indent=1, sort_keys=True))
+    else:
+        print("%s: ok (%s)" % (name, folder))
+
+
+def cmd_dirs(args):
+    if not os.path.isdir(REPORTS_ROOT):
+        print("no report folders yet (%s)" % REPORTS_ROOT)
+        return
+    for d in sorted(glob.glob(os.path.join(REPORTS_ROOT, "*", "*"))):
+        s = read_json(os.path.join(d, "status.json")) or {}
+        cap = s.get("capture") or {}
+        print("%s  library %s  capture #%s %s  %s" % (
+            d, s.get("library"), cap.get("number"), cap.get("mode", ""),
+            time.strftime("%H:%M:%S", time.localtime(s.get("updated", 0)))))
+
+
+# ---------------------------------------------------------------- accessibility (read from the Mac)
+
+def read_accessibility(udid):
+    """The simulator's accessibility tree, flat: [{frame, identifier, label, role}]. SwiftUI builds it only for an
+    accessibility client, so it is read from outside (simtool or axe), not by the app. None when neither tool is here."""
+    if shutil.which("simtool"):
+        try:
+            p = subprocess.run(["simtool", "ax", "tree", "--device", udid, "--flat", "--labeled"],
+                               capture_output=True, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            warn("simtool ax tree did not answer in 60 s; accessibility ids and labels are left out")
+            return None
+        try:
+            nodes = json.loads(p.stdout).get("nodes") or []
+            return [{"frame": n.get("frame"), "identifier": n.get("id"), "label": n.get("label"), "role": n.get("type")}
+                    for n in nodes if n.get("frame") and (n.get("id") or n.get("label"))]
+        except ValueError:
+            pass
+    if shutil.which("axe"):
+        try:
+            p = subprocess.run(["axe", "describe-ui", "--udid", udid], capture_output=True, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            warn("axe describe-ui did not answer in 60 s; accessibility ids and labels are left out")
+            return None
+        try:
+            tree = json.loads(p.stdout)
+        except ValueError:
+            return None
+        result = []
+
+        def walk(n):
+            f = n.get("frame") or {}
+            if f and (n.get("AXUniqueId") or n.get("AXLabel")):
+                result.append({"frame": [f.get("x"), f.get("y"), f.get("width"), f.get("height")],
+                               "identifier": n.get("AXUniqueId"), "label": n.get("AXLabel"), "role": n.get("type")})
+            for c in n.get("children") or []:
+                walk(c)
+        for n in tree if isinstance(tree, list) else [tree]:
+            walk(n)
+        return result
+    return None
+
+
+def merge_accessibility(data, elements):
+    """Gives each element to the node whose frame matches it within a point (accessibility frames are whole points):
+    a content node (text, image, control) if there is one, otherwise the deepest. Hosts and layout modifiers don't
+    take elements. Unmatched elements stay in data["accessibility"] with "node": null."""
+    nodes = data.get("nodes") or []
+    by_id = {n["id"]: n for n in nodes}
+
+    def depth(n):
+        d, p = 0, by_id.get(n.get("parent"))
+        while p:
+            d, p = d + 1, by_id.get(p.get("parent"))
+        return d
+
+    layout = {"padding", "frame", "flexFrame", "fixedSize", "aspectRatio", "offset", "layoutPriority",
+              "ignoresSafeArea", "host", "customModifier"}
+    candidates = [n for n in nodes if n.get("tree") == "swiftui" and n.get("visible") and frame(n)
+                  and n.get("kind") not in layout]
+    taken = set()
+    for e in elements:
+        f = e["frame"]
+        close = [n for n in candidates if n["id"] not in taken and all(abs(a - b) <= 1.01 for a, b in zip(
+            [frame(n)[0], frame(n)[1], frame(n)[0] + frame(n)[2], frame(n)[1] + frame(n)[3]],
+            [f[0], f[1], f[0] + f[2], f[1] + f[3]]))]
+        content = [n for n in close if n.get("kind") in CONTENT_KINDS]
+        best = max(content or close, key=depth) if close else None
+        e["node"] = best["id"] if best else None
+        if best:
+            taken.add(best["id"])
+            facts = dict(best.get("accessibility") or {})
+            if e.get("identifier"):
+                facts.setdefault("identifier", e["identifier"])
+            if e.get("label"):
+                facts.setdefault("label", e["label"])
+            best["accessibility"] = facts
+    data["accessibility"] = elements
+    data["accessibilitySource"] = "mac"
+    return data
+
+
+# ---------------------------------------------------------------- capture.json
+
+class Capture:
+    def __init__(self, data, path):
+        self.path = path
+        self.data = data
+        self.nodes = data.get("nodes") or []
+        self.by_id = {n["id"]: n for n in self.nodes}
+        self.children = {}
+        for n in self.nodes:
+            self.children.setdefault(n.get("parent"), []).append(n)
+        self.ax = data.get("accessibility") or []
+        if data.get("schemaVersion") != SCHEMA_VERSION:
+            warn("%s has schema %s, this li reads %s" % (path, data.get("schemaVersion"), SCHEMA_VERSION))
+
+    def parent(self, n):
+        return self.by_id.get(n.get("parent"))
+
+    def ancestors(self, n):
+        p = self.parent(n)
+        while p:
+            yield p
+            p = self.parent(p)
+
+    def depth(self, n):
+        return sum(1 for _ in self.ancestors(n))
+
+
+def pid_alive(pid):
+    """Simulator apps are processes of this Mac."""
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except PermissionError:
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def load_capture(args):
+    path = args.get("--file")
+    if not path and args.get("--dir"):
+        path = os.path.join(args.get("--dir"), "capture.json")
+    if not path:
+        udid = resolve_device(args)
+        bundle = args.get("--bundle")
+        dirs = [os.path.join(device_dir(udid), bundle)] if bundle else app_dirs(udid)
+        for d in dirs:
+            if os.path.isfile(os.path.join(d, "capture.json")):
+                path = os.path.join(d, "capture.json")
+                merged = os.path.join(d, "capture.ax.json")
+                if os.path.isfile(merged):
+                    a, b = read_json(path) or {}, read_json(merged) or {}
+                    if (a.get("capture") or {}).get("number") == (b.get("capture") or {}).get("number") and \
+                            (a.get("capture") or {}).get("date") == (b.get("capture") or {}).get("date"):
+                        path = merged
+                break
+        if not path:
+            raise Fail("no capture of %s yet: run `li spacing --device %s` (or another mode) first" % (udid, udid), 1)
+        pid = ((read_json(os.path.join(os.path.dirname(path), "status.json")) or {}).get("app") or {}).get("pid")
+        if pid and not pid_alive(pid):
+            warn("this capture is from a run of the app that has ended; run `li spacing --device %s` (or another "
+                 "mode) to capture the screen as it is now" % udid)
+    data = read_json(path)
+    if data is None:
+        raise Fail("cannot read %s" % path, 1)
+    return Capture(data, path)
+
+
+def frame(n):
+    f = n.get("frame")
+    return f if isinstance(f, list) and len(f) == 4 else None
+
+
+def pt(v):
+    if v is None:
+        return "-"
+    v = round(v * 100) / 100
+    if v == int(v):
+        return str(int(v))
+    return ("%.2f" % v).rstrip("0")
+
+
+def rect_str(f):
+    return "x %s y %s  %s×%s" % (pt(f[0]), pt(f[1]), pt(f[2]), pt(f[3])) if f else "off screen"
+
+
+def contains(outer, inner):
+    return (outer[0] <= inner[0] + 0.01 and outer[1] <= inner[1] + 0.01 and
+            outer[0] + outer[2] >= inner[0] + inner[2] - 0.01 and outer[1] + outer[3] >= inner[1] + inner[3] - 0.01)
+
+
+def parse_selector(text):
+    for prefix in ("text", "id", "label", "type", "node"):
+        if text.startswith(prefix + ":"):
+            return prefix, text[len(prefix) + 1:]
+    return "auto", text
+
+
+def selector_from_args(args):
+    for key in ("text", "id", "label", "type", "node"):
+        if args.get("--" + key) is not None:
+            return key, args.get("--" + key)
+    if args.pos:
+        return parse_selector(args.pos[0])
+    raise Fail("which element? --text, --id, --label, --type or --node")
+
+
+def find(cap, kind, value):
+    """Matching nodes, best first: visible ones, exact before partial, content before containers."""
+    nodes = [n for n in cap.nodes if n.get("tree") == "swiftui"] or cap.nodes
+    hits = []
+    if kind == "node":
+        n = cap.by_id.get(int(value))
+        return [n] if n else []
+    if kind in ("text", "auto"):
+        exact = [n for n in nodes if (n.get("text") or {}).get("string") == value]
+        partial = [n for n in nodes if n not in exact and value.lower() in ((n.get("text") or {}).get("string") or "").lower()]
+        hits = exact + partial
+        if not hits:
+            hits = [n for n in cap.nodes if n.get("tree") == "uikit" and (n.get("uikit") or {}).get("text") == value]
+        if hits or kind == "text":
+            return order(hits)
+    if kind in ("id", "label") and cap.data.get("accessibilitySource") != "mac":
+        warn("this capture has no accessibility ids or labels of SwiftUI views (only UIKit ones): run the mode "
+             "command with simtool or axe installed, or select by --text/--type")
+    if kind in ("id", "auto"):
+        hits = [n for n in cap.nodes if (n.get("accessibility") or {}).get("identifier") == value]
+        if not hits:
+            hits = element_nodes(cap, [e for e in cap.ax if e.get("identifier") == value])
+        if hits or kind == "id":
+            return order(hits)
+    if kind in ("label", "auto"):
+        hits = [n for n in cap.nodes if (n.get("accessibility") or {}).get("label") == value]
+        if not hits:
+            hits = element_nodes(cap, [e for e in cap.ax if e.get("label") == value])
+        return order(hits)
+    if kind == "type":
+        hits = [n for n in nodes if n.get("title") == value]
+        if not hits:
+            hits = [n for n in nodes if value in outer_type(n) and n.get("kind") in ("component", "stack", "control")]
+        return order(hits)
+    raise Fail("unknown selector kind %s" % kind)
+
+
+def outer_type(node):
+    """`SwiftUI.HStack<…AvatarView…>` -> `HStack`: generic arguments name the children, not the node."""
+    return (node.get("type") or "").split("<", 1)[0].rsplit(".", 1)[-1]
+
+
+def element_nodes(cap, elements):
+    """Accessibility elements no node took: the smallest visible node that contains each one."""
+    result = []
+    for e in elements:
+        if e.get("node") in cap.by_id:
+            result.append(cap.by_id[e["node"]])
+            continue
+        f = e.get("frame")
+        inside = [n for n in cap.nodes if n.get("tree") == "swiftui" and frame(n) and n.get("kind") != "host"
+                  and contains(frame(n), f)]
+        if inside:
+            best = min(inside, key=lambda n: (frame(n)[2] * frame(n)[3], -cap.depth(n)))
+            best = dict(best)
+            best["_element"] = e
+            result.append(best)
+    return result
+
+
+def order(nodes):
+    def key(n):
+        return (0 if n.get("visible") and frame(n) else 1, 0 if n.get("kind") in CONTENT_KINDS else 1)
+    seen, result = set(), []
+    for n in sorted(nodes, key=key):
+        if n["id"] not in seen:
+            seen.add(n["id"])
+            result.append(n)
+    return result
+
+
+def pick(cap, kind, value, index):
+    hits = find(cap, kind, value)
+    if not hits:
+        hint = ""
+        if kind == "type" and not any(n.get("kind") == "component" for n in cap.nodes):
+            hint = ("\nThis capture has no component names (the app's own view types): on iOS 18 the inspector can't "
+                    "read them. Select by --text, or by a SwiftUI type such as VStack.")
+        raise Fail("nothing matches %s %r in %s%s" % (kind, value, cap.path, hint))
+    if index >= len(hits):
+        raise Fail("%d matches for %s %r, --index %d is out of range" % (len(hits), kind, value, index))
+    return hits[index], hits
+
+
+def describe_name(n):
+    t = (n.get("text") or {}).get("string")
+    name = n.get("title") or n.get("kind")
+    if t:
+        name += " %r" % (t if len(t) <= 40 else t[:39] + "…")
+    elif n.get("detail"):
+        name += " " + n["detail"][:40]
+    return name
+
+
+def nearest_container(cap, n):
+    """What Measure measures a single element against: its enclosing component, else a stack, padding or scroll."""
+    f = frame(n)
+    if not f:
+        return None
+    for p in cap.ancestors(n):
+        pf = frame(p)
+        if p.get("kind") == "component" and p.get("visible") and pf and pf != f and contains(pf, f):
+            return p
+    for p in cap.ancestors(n):
+        pf = frame(p)
+        if (p.get("kind") != "host" and p.get("visible") and pf and pf != f and contains(pf, f)
+                and p.get("kind") in ("component", "stack", "padding", "scroll")):
+            return p
+    return None
+
+
+def measure(a, b):
+    """The distances the Measure mode draws between frames a and b, rounded to 0.01 pt like the report."""
+    return {k: (round(v, 2) if isinstance(v, float) else v) for k, v in _measure(a, b).items()}
+
+
+def _measure(a, b):
+    A, B = a, b
+    if contains(B, A) or contains(A, B):
+        inner, outer = (A, B) if contains(B, A) else (B, A)
+        return {"relation": "inside" if inner is A else "contains",
+                "left": inner[0] - outer[0], "right": (outer[0] + outer[2]) - (inner[0] + inner[2]),
+                "top": inner[1] - outer[1], "bottom": (outer[1] + outer[3]) - (inner[1] + inner[3])}
+    result = {"relation": "apart"}
+    if A[0] + A[2] <= B[0]:
+        result["horizontal"] = B[0] - (A[0] + A[2])
+    elif B[0] + B[2] <= A[0]:
+        result["horizontal"] = A[0] - (B[0] + B[2])
+    if A[1] + A[3] <= B[1]:
+        result["vertical"] = B[1] - (A[1] + A[3])
+    elif B[1] + B[3] <= A[1]:
+        result["vertical"] = A[1] - (B[1] + B[3])
+    for key in ("horizontal", "vertical"):
+        if key in result and result[key] <= 0.25:
+            result[key] = 0.0
+    if "horizontal" not in result and "vertical" not in result:
+        result["relation"] = "overlap"
+    return result
+
+
+def neighbours(cap, n):
+    """Nearest visible content element on each side, and the gap to it."""
+    f = frame(n)
+    if not f:
+        return {}
+    related = {n["id"]} | {p["id"] for p in cap.ancestors(n)}
+
+    best = {}
+    for m in cap.nodes:
+        mf = frame(m)
+        if (m.get("tree") != "swiftui" or m["id"] in related or not m.get("visible") or not mf
+                or m.get("kind") not in CONTENT_KINDS or mf == f):
+            continue
+        if any(p["id"] == n["id"] for p in cap.ancestors(m)):
+            continue
+        h_overlap = min(f[0] + f[2], mf[0] + mf[2]) - max(f[0], mf[0]) > 0.5
+        v_overlap = min(f[1] + f[3], mf[1] + mf[3]) - max(f[1], mf[1]) > 0.5
+        candidates = []
+        if h_overlap and mf[1] + mf[3] <= f[1] + 0.25:
+            candidates.append(("above", f[1] - (mf[1] + mf[3])))
+        if h_overlap and mf[1] >= f[1] + f[3] - 0.25:
+            candidates.append(("below", mf[1] - (f[1] + f[3])))
+        if v_overlap and mf[0] + mf[2] <= f[0] + 0.25:
+            candidates.append(("left", f[0] - (mf[0] + mf[2])))
+        if v_overlap and mf[0] >= f[0] + f[2] - 0.25:
+            candidates.append(("right", mf[0] - (f[0] + f[2])))
+        for side, gap in candidates:
+            gap = max(0.0, gap)
+            if side not in best or gap < best[side][0] - 0.01:
+                best[side] = (gap, m)
+    return best
+
+
+def paddings_around(cap, n):
+    """Padding modifiers that wrap the element directly (up to the first stack or component)."""
+    result = []
+    for p in cap.ancestors(n):
+        if p.get("kind") in ("stack", "component", "host", "scroll", "list"):
+            break
+        if p.get("padding"):
+            result.append(p)
+    return result
+
+
+def node_summary(cap, n):
+    f = frame(n)
+    s = {"node": n["id"], "kind": n.get("kind"), "title": n.get("title"), "type": n.get("type"),
+         "component": n.get("component"), "frame": f, "visible": n.get("visible")}
+    for key in ("text", "accessibility", "padding", "stack", "siblingGaps", "constraints", "image", "uikit"):
+        if n.get(key) is not None:
+            s[key] = n[key]
+    if n.get("_element"):
+        s["accessibilityElement"] = n["_element"]
+    s["paddings"] = [{"node": p["id"], "declared": p["padding"].get("declared"), "measured": p["padding"].get("measured"),
+                      "frame": frame(p)} for p in paddings_around(cap, n)]
+    gap_owner = next((x for x in [n] + list(cap.ancestors(n)) if x.get("siblingGaps")), None)
+    if gap_owner:
+        s["stackGaps"] = dict(gap_owner["siblingGaps"], node=gap_owner["id"])
+    c = nearest_container(cap, n)
+    if c and f:
+        s["container"] = {"node": c["id"], "title": c.get("title"), "frame": frame(c), "insets": measure(f, frame(c))}
+    s["neighbours"] = {side: {"node": m["id"], "name": describe_name(m), "gap": round(g, 2), "frame": frame(m)}
+                       for side, (g, m) in neighbours(cap, n).items()}
+    s["lint"] = [i for i in cap.data.get("lint") or [] if i.get("node") == n["id"]]
+    return s
+
+
+def print_summary(s):
+    print("%s  [node %s, %s]" % (s["title"], s["node"], s["kind"]))
+    if s.get("component"):
+        print("  in component  %s" % s["component"])
+    print("  frame         %s" % rect_str(s.get("frame")))
+    t = s.get("text")
+    if t:
+        print("  text          %r%s%s" % (t.get("string"), "  TRUNCATED" if t.get("truncated") else "",
+                                          "  %s lines" % t["lines"] if t.get("lines") else ""))
+        font = t.get("font")
+        if font:
+            print("  font          %s  (%s, %s pt, %s, line height %s)" % (
+                font.get("display"), font.get("postScriptName"), pt(font.get("size")), font.get("weight"),
+                pt(font.get("lineHeight"))))
+        if t.get("color"):
+            print("  color         %s" % t["color"])
+    ui = s.get("uikit")
+    if ui and ui.get("font"):
+        print("  uikit font    %s" % ui["font"].get("display"))
+    ax = s.get("accessibility") or {}
+    if ax:
+        print("  accessibility %s" % "  ".join("%s=%r" % kv for kv in sorted(ax.items())))
+    for p in s.get("paddings") or []:
+        m = p["measured"]
+        print("  padding       measured t %s l %s b %s r %s%s" % (
+            pt(m["top"]), pt(m["leading"]), pt(m["bottom"]), pt(m["trailing"]),
+            "" if p["declared"] is not None else "  (system default)"))
+    if s.get("stack"):
+        st = s["stack"]
+        print("  stack         %s spacing %s, gaps %s" % (
+            st.get("axis"), pt(st.get("spacing")) if st.get("spacing") is not None else "default",
+            "/".join(pt(g) for g in st.get("gaps") or []) or "-"))
+    g = s.get("stackGaps")
+    if g:
+        print("  in stack      %s gap before %s, after %s" % (g.get("axis"), pt(g.get("before")), pt(g.get("after"))))
+    c = s.get("container")
+    if c:
+        i = c["insets"]
+        print("  in container  %s: left %s right %s top %s bottom %s" % (
+            c["title"], pt(i.get("left")), pt(i.get("right")), pt(i.get("top")), pt(i.get("bottom"))))
+    for side in ("above", "below", "left", "right"):
+        nb = (s.get("neighbours") or {}).get(side)
+        if nb:
+            print("  %-13s %s gap to %s" % (side, pt(nb["gap"]), nb["name"]))
+    for issue in s.get("lint") or []:
+        print("  lint          %s: %s" % (issue.get("severity"), issue.get("message")))
+
+
+def cmd_query(args):
+    cap = load_capture(args)
+    kind, value = selector_from_args(args)
+    index = int(args.get("--index", "0"))
+    node, hits = pick(cap, kind, value, index)
+    targets = hits if args.flag("--all") else [node]
+    summaries = [node_summary(cap, n) for n in targets]
+    if args.flag("--json"):
+        print(json.dumps(summaries if args.flag("--all") else summaries[0], indent=1, ensure_ascii=False))
+        return
+    if len(hits) > 1 and not args.flag("--all"):
+        print("(%d matches, showing #%d; --all or --index N for the others)" % (len(hits), index))
+    for s in summaries:
+        print_summary(s)
+    print("source: %s" % cap.path)
+
+
+def cmd_measure(args):
+    cap = load_capture(args)
+    sels = [parse_selector(p) for p in args.pos]
+    if not sels and any(args.get("--" + k) is not None for k in ("text", "id", "label", "type", "node")):
+        sels = [selector_from_args(args)]
+    if not sels:
+        raise Fail("li measure A [B]: elements as text:…, id:…, label:…, type:…, node:… or a bare text")
+    a, _ = pick(cap, sels[0][0], sels[0][1], int(args.get("--index", "0")))
+    if len(sels) > 1:
+        b, _ = pick(cap, sels[1][0], sels[1][1], int(args.get("--index-b", "0")))
+    else:
+        b = nearest_container(cap, a)
+        if not b:
+            raise Fail("%s has no enclosing container to measure against" % describe_name(a))
+    fa, fb = frame(a), frame(b)
+    if not fa or not fb:
+        raise Fail("%s is off screen" % describe_name(a if not fa else b))
+    m = measure(fa, fb)
+    result = {"a": {"node": a["id"], "name": describe_name(a), "frame": fa},
+              "b": {"node": b["id"], "name": describe_name(b), "frame": fb}, "distance": m}
+    if args.flag("--json"):
+        print(json.dumps(result, indent=1, ensure_ascii=False))
+        return
+    print("A  %s  %s" % (describe_name(a), rect_str(fa)))
+    print("B  %s  %s" % (describe_name(b), rect_str(fb)))
+    if m["relation"] in ("inside", "contains"):
+        inner = "A" if m["relation"] == "inside" else "B"
+        print("%s inside %s: left %s  right %s  top %s  bottom %s" % (
+            inner, "B" if inner == "A" else "A", pt(m["left"]), pt(m["right"]), pt(m["top"]), pt(m["bottom"])))
+    elif m["relation"] == "overlap":
+        print("A and B overlap: no gap on either axis")
+    else:
+        parts = []
+        if "horizontal" in m:
+            parts.append("horizontal gap %s" % pt(m["horizontal"]))
+        if "vertical" in m:
+            parts.append("vertical gap %s" % pt(m["vertical"]))
+        print(", ".join(parts))
+
+
+# ---------------------------------------------------------------- headless Xcode (previews)
+
+def bridge_dir():
+    return os.environ.get("LI_BRIDGE_DIR") or os.path.join(tempfile.gettempdir(), "li-bridge-%d" % os.getuid())
+
+
+def bridge_pid():
+    try:
+        pid = int(open(os.path.join(bridge_dir(), "bridge.pid")).read())
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError):
+        return None
+
+
+def cmd_bridge(args):
+    """Replaces this process with mcpbridge, connected to the headless Xcode service through a FIFO.
+
+    Headless Xcode trusts the agent by the code signature of the process that launched mcpbridge. Run it as
+    `exec li bridge` from the agent's own shell (in the background): then that process is the agent itself.
+    """
+    d = bridge_dir()
+    if bridge_pid():
+        print("bridge already running (pid %s, %s)" % (bridge_pid(), d))
+        return
+    xcode = args.get("--xcode-pid") or subprocess.run(
+        ["pgrep", "-f", "Agents/Xcode Service.app/Contents/MacOS/Xcode Service"],
+        capture_output=True, text=True).stdout.split("\n")[0].strip()
+    if not xcode:
+        raise Fail("no headless Xcode service running. Headless mode is set up with `sudo xcrun mcp-server enable` "
+                   "(once per Mac); `xcrun mcp-server status` shows its state", 2)
+    parent = subprocess.run(["ps", "-o", "comm=", "-p", str(os.getppid())], capture_output=True, text=True).stdout.strip()
+    binary = parent if os.sep in parent else (shutil.which(parent) or parent)
+    ident = subprocess.run(["codesign", "-dv", binary], capture_output=True, text=True).stderr
+    ident = (re.search(r"^Identifier=(.*)$", ident, re.M) or [None, ""])[1]
+    base = os.path.basename(parent)
+    if base in ("python3", "python", "bash", "zsh", "sh", "env", "plq", "timeout") and not args.flag("--force"):
+        raise Fail("mcpbridge would be launched by %s, which headless Xcode would treat as a new agent and ask a human "
+                   "to approve. Start it as `exec li bridge` from the agent's shell." % parent, 2)
+    os.makedirs(d, exist_ok=True)
+    fifo = os.path.join(d, "in")
+    if os.path.exists(fifo):
+        os.unlink(fifo)
+    os.mkfifo(fifo)
+    open(os.path.join(d, "out.jsonl"), "w").close()
+    if os.path.exists(os.path.join(d, "initialized")):
+        os.unlink(os.path.join(d, "initialized"))
+    open(os.path.join(d, "bridge.pid"), "w").write(str(os.getpid()))
+    open(os.path.join(d, "parent"), "w").write("%s %s %s\n" % (os.getppid(), ident, parent))
+    os.environ["MCP_XCODE_PID"] = xcode
+    developer = run(["xcode-select", "-p"]).stdout.strip()
+    bridge = os.path.join(developer, "usr/bin/mcpbridge")
+    rfd = os.open(fifo, os.O_RDWR)
+    out = os.open(os.path.join(d, "out.jsonl"), os.O_WRONLY | os.O_APPEND)
+    err = os.open(os.path.join(d, "err.log"), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    print("bridge: %s (xcode service pid %s, launched by %s %s)" % (d, xcode, ident or "?", parent), flush=True)
+    os.dup2(rfd, 0)
+    os.dup2(out, 1)
+    os.dup2(err, 2)
+    os.execv(bridge, [bridge])
+
+
+def x_send(msg):
+    try:
+        fd = os.open(os.path.join(bridge_dir(), "in"), os.O_WRONLY | os.O_NONBLOCK)
+    except OSError as e:
+        raise Fail("the bridge is not reading (%s); see %s/err.log, then `exec li bridge` again" % (e, bridge_dir()), 2)
+    try:
+        os.write(fd, (json.dumps(msg) + "\n").encode())
+    finally:
+        os.close(fd)
+
+
+def x_request(method, params, timeout):
+    out = os.path.join(bridge_dir(), "out.jsonl")
+    req_id = str(uuid.uuid4())
+    offset = os.path.getsize(out)
+    x_send({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params})
+    deadline = time.time() + timeout
+    buf = b""
+    with open(out, "rb") as f:
+        f.seek(offset)
+        while time.time() < deadline:
+            chunk = f.read()
+            if chunk:
+                buf += chunk
+                *lines, buf = buf.split(b"\n")
+                for line in lines:
+                    try:
+                        msg = json.loads(line)
+                    except ValueError:
+                        continue
+                    if msg.get("id") == req_id:
+                        return msg
+            else:
+                if bridge_pid() is None:
+                    raise Fail("the bridge died; see %s/err.log, then `exec li bridge` again" % bridge_dir(), 2)
+                time.sleep(0.2)
+    status = subprocess.run(["xcrun", "mcp-server", "status"], capture_output=True, text=True).stdout
+    raise Fail("headless Xcode did not answer %s within %ss. A pending approval shows here:\n%s" % (
+        method, timeout, status), 3)
+
+
+def x_init():
+    if bridge_pid() is None:
+        raise Fail("no bridge: run `exec li bridge` in the background from the agent's shell first", 2)
+    flag = os.path.join(bridge_dir(), "initialized")
+    if os.path.exists(flag):
+        return
+    r = x_request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                 "clientInfo": {"name": "li", "version": LI_VERSION}}, 60)
+    if "error" in r:
+        raise Fail("initialize failed: %s" % r["error"], 2)
+    x_send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    open(flag, "w").write("1")
+
+
+def x_call(tool, arguments, timeout=120):
+    x_init()
+    r = x_request("tools/call", {"name": tool, "arguments": arguments}, timeout)
+    if "error" in r:
+        raise Fail("%s failed: %s" % (tool, json.dumps(r["error"])[:2000]), 2)
+    return r["result"]
+
+
+def x_text(result):
+    if result.get("structuredContent") is not None:
+        return result["structuredContent"]
+    joined = "\n".join(c.get("text", "") for c in result.get("content", []) if c.get("type") == "text")
+    try:
+        return json.loads(joined)
+    except ValueError:
+        return joined
+
+
+def cmd_xcall(args):
+    """Internal: one tool call, so a build can run inside a build queue."""
+    tool, arguments, out = args.pos[0], json.loads(args.pos[1]), args.get("--out")
+    res = x_call(tool, arguments, float(args.get("--timeout", "1200")))
+    with open(out, "w") as f:
+        json.dump(res, f)
+
+
+# Swift source scanning, for #Preview bodies.
+
+def _skip_string(src, i):
+    hashes = 0
+    while src[i] == "#":
+        hashes += 1
+        i += 1
+    if src.startswith('"""', i):
+        return src.find('"""' + "#" * hashes, i + 3) + 3 + hashes
+    i += 1
+    while i < len(src):
+        c = src[i]
+        if c == "\\" and hashes == 0:
+            if src[i + 1] == "(":
+                i = _match(src, i + 1, "(", ")") + 1
+                continue
+            i += 2
+            continue
+        if c == '"' and src.startswith("#" * hashes, i + 1):
+            return i + 1 + hashes
+        i += 1
+    return i
+
+
+def _match(src, i, open_c, close_c):
+    depth = 0
+    while i < len(src):
+        if src.startswith("//", i):
+            i = src.find("\n", i)
+            continue
+        if src.startswith("/*", i):
+            i = src.find("*/", i) + 2
+            continue
+        c = src[i]
+        if c == '"' or (c == "#" and src[i:].lstrip("#").startswith('"')):
+            i = _skip_string(src, i)
+            continue
+        if c == open_c:
+            depth += 1
+        elif c == close_c:
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    raise Fail("unbalanced %s%s in the Swift file" % (open_c, close_c))
+
+
+def find_previews(src):
+    found = []
+    for m in re.finditer(r"#Preview\b", src):
+        line_start = src.rfind("\n", 0, m.start()) + 1
+        if src[line_start:m.start()].strip().startswith("//"):
+            continue
+        i = m.end()
+        while src[i].isspace():
+            i += 1
+        params = ""
+        if src[i] == "(":
+            j = _match(src, i, "(", ")")
+            params = src[i + 1:j]
+            i = j + 1
+            while src[i].isspace():
+                i += 1
+        if src[i] != "{":
+            continue
+        j = _match(src, i, "{", "}")
+        name = re.match(r'\s*"((?:[^"\\]|\\.)*)"', params)
+        found.append({"name": name.group(1) if name else "", "params": params, "body": src[i + 1:j]})
+    return found
+
+
+def find_workspace(path):
+    d = os.path.dirname(os.path.abspath(path))
+    projects = None
+    while d != "/":
+        ws = [x for x in glob.glob(os.path.join(d, "*.xcworkspace"))]
+        if ws:
+            return ws[0]
+        pr = glob.glob(os.path.join(d, "*.xcodeproj"))
+        if pr and not projects:
+            projects = pr[0]
+        d = os.path.dirname(d)
+    if projects:
+        return projects
+    raise Fail("no .xcworkspace or .xcodeproj above %s; pass --workspace" % path)
+
+
+SNIPPET = r'''
+import SwiftUI
+import LayoutInspector
+__IMPORTS__
+@MainActor @ViewBuilder func __liPreviewBody() -> some View {
+__BODY__
+}
+let __liSnapshot = await LayoutInspector.snapshot(__liPreviewBody(), size: CGSize(width: __W__, height: __H__), fitsHeight: __FIT__, timeout: .seconds(__STABLE__))
+print("@@LI@@ version \(LayoutInspector.version)")
+print("@@LI@@ stable \(__liSnapshot.isStable) \(__liSnapshot.settleTime)")
+do {
+    let files = try __liSnapshot.write(to: URL(fileURLWithPath: "__OUT__"), modes: [__MODES__])
+    print("@@LI@@ written \(files.count)")
+} catch {
+    print("@@LI@@ write-failed \(error)")
+    print("@@LI@@ json " + __liSnapshot.json().base64EncodedString())
+    print("@@LI@@ report-b64 " + Data(__liSnapshot.report.utf8).base64EncodedString())
+}
+__liSnapshot.close()
+'''
+
+
+def cmd_preview(args):
+    if not args.pos:
+        raise Fail("li preview FILE …")
+    path = os.path.abspath(args.pos[0])
+    if not os.path.isfile(path):
+        raise Fail("%s not found" % path)
+    src = open(path).read()
+    previews = find_previews(src)
+    if args.flag("--list"):
+        for i, p in enumerate(previews):
+            print("%d  %s" % (i, p["name"] or "(unnamed)"))
+        return
+    modes = [MODE_ALIASES.get(m.strip(), m.strip()) for m in args.get("--mode", "spacing").split(",") if m.strip()]
+    for m in modes:
+        if m not in MODES:
+            raise Fail("unknown mode %s" % m)
+    size = args.get("--size")
+    if args.get("--view"):
+        body, label, params = args.get("--view"), "view", ""
+    else:
+        if args.get("--preview") is not None:
+            name = args.get("--preview")
+            hits = [p for p in previews if p["name"] == name] or [p for p in previews if p["name"].startswith(name)]
+            if len(hits) != 1:
+                raise Fail("preview %r: %d matches; li preview FILE --list" % (name, len(hits)))
+            chosen = hits[0]
+        elif args.get("--index") is not None:
+            i = int(args.get("--index"))
+            if not 0 <= i < len(previews):
+                raise Fail("--index %d: the file has %d previews; li preview FILE --list" % (i, len(previews)))
+            chosen = previews[i]
+        else:
+            raise Fail("which preview? --preview NAME, --index N or --view EXPR")
+        body, label, params = chosen["body"], chosen["name"] or "preview", chosen["params"]
+        if "@Previewable" in body:
+            raise Fail("previews with @Previewable state can't run as a snippet; pass the view with --view")
+    if not size and "sizeThatFitsLayout" in params:
+        size = "fit"
+    w, h, fit = 402, 874, False
+    if size == "fit":
+        fit = True
+    elif size:
+        parts = size.lower().split("x")
+        if len(parts) != 2:
+            raise Fail("--size WIDTHxHEIGHT (e.g. 402x874) or fit")
+        w, h = int(parts[0]), int(parts[1])
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", "%s-%s" % (os.path.splitext(os.path.basename(path))[0], label)).strip("-")
+    out = os.path.abspath(args.get("--out") or os.path.join(tempfile.gettempdir(), "layout-inspector", "previews",
+                                                         time.strftime("%Y%m%d-%H%M%S-") + slug))
+    os.makedirs(out, exist_ok=True)
+    code = (SNIPPET.replace("__W__", str(w)).replace("__H__", str(h)).replace("__FIT__", "true" if fit else "false")
+            .replace("__STABLE__", str(float(args.get("--stable-timeout", "15"))))
+            .replace("__OUT__", out.replace("\\", "\\\\").replace('"', '\\"'))
+            .replace("__MODES__", ", ".join("." + m for m in modes)).replace("__BODY__", body)
+            .replace("__IMPORTS__", "\n".join("import " + m for m in (args.get("--import") or "").split(",") if m.strip())))
+    if args.get("--setup"):
+        code = args.get("--setup") + "\n" + code
+    with open(os.path.join(out, "snippet.swift"), "w") as f:
+        f.write(code)
+
+    x_init()
+    workspace = os.path.abspath(args.get("--workspace") or find_workspace(path))
+    opened = x_text(x_call("XcodeOpenWorkspace", {"path": workspace}, 180))
+    ws_id = opened.get("workspaceIdentifier") if isinstance(opened, dict) else None
+    if not ws_id:
+        raise Fail("headless Xcode did not open %s: %s" % (workspace, str(opened)[:500]), 2)
+    project_file = project_path(ws_id, path)
+    scheme = args.get("--scheme") or guess_scheme(ws_id, path)
+    if scheme:
+        cur = x_text(x_call("XcodeListSchemes", {"workspaceIdentifier": ws_id}, 60))
+        if isinstance(cur, dict) and cur.get("activeSchemeName") != scheme:
+            x_call("XcodeSwitchScheme", {"workspaceIdentifier": ws_id, "schemeName": scheme}, 60)
+    timeout = int(args.get("--timeout", "1200"))
+    call_args = {"workspaceIdentifier": ws_id, "sourceFilePath": project_file, "codeSnippet": code,
+                 "purpose": "Measure the layout of %s with the layout inspector" % label, "timeout": timeout}
+    result_path = os.path.join(out, "result.json")
+    cmd = [sys.executable, os.path.abspath(__file__), "_xcall", "RunCodeSnippet", json.dumps(call_args),
+           "--out", result_path, "--timeout", str(timeout + 60)]
+    if not args.flag("--no-queue") and not os.environ.get("PLQ_RUN") and shutil.which("plq"):
+        cmd = ["plq", "run", "--label", "li preview " + slug, "--"] + cmd
+    t0 = time.time()
+    queue_timeout = float(args.get("--queue-timeout", "3600"))
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=queue_timeout + timeout + 120)
+    except subprocess.TimeoutExpired:
+        raise Fail("the preview run did not finish in %.0f s (queue wait included; --queue-timeout, --timeout)"
+                   % (queue_timeout + timeout + 120), 3)
+    took = time.time() - t0
+    if p.returncode != 0 or not os.path.exists(result_path):
+        code = p.returncode if p.returncode in (1, 2, 3) else 2
+        raise Fail("RunCodeSnippet did not finish: %s" % (p.stderr or p.stdout)[-3000:], code)
+    raw = json.load(open(result_path))
+    body_out = x_text(raw)
+    if raw.get("isError"):
+        raise Fail("RunCodeSnippet failed: %s" % (json.dumps(body_out) if not isinstance(body_out, str) else body_out)[:4000], 1)
+    if isinstance(body_out, dict) and body_out.get("error"):
+        err = body_out["error"]
+        text = json.dumps(err)[:4000] if not isinstance(err, dict) else "%s\n%s" % (err.get("message"), (err.get("summary") or "")[:3000])
+        if "snapshot" in text and ("has no member" in text or "cannot find" in text):
+            text += "\nThe module links SwiftUILayoutInspector older than 0.2.6, or does not import it."
+        raise Fail("the snippet failed to build or run:\n" + text, 1)
+    output = body_out.get("executionResults", "") if isinstance(body_out, dict) else str(body_out)
+    info = {}
+    for line in output.split("\n"):
+        if line.startswith("@@LI@@ "):
+            kind, _, rest = line[7:].partition(" ")
+            info[kind] = rest
+    if "json" in info:
+        open(os.path.join(out, "capture.json"), "wb").write(base64.b64decode(info["json"]))
+        open(os.path.join(out, "report.txt"), "wb").write(base64.b64decode(info.get("report-b64", "")))
+    if not os.path.isfile(os.path.join(out, "capture.json")):
+        raise Fail("the snippet ran but wrote nothing to %s. Output:\n%s" % (out, output[-3000:]), 1)
+    data = read_json(os.path.join(out, "capture.json")) or {}
+    status = read_json(os.path.join(out, "status.json")) or {"library": info.get("version")}
+    check_versions(dict(status, schemaVersion=data.get("schemaVersion")))
+    stable = info.get("stable", "").split(" ")
+    print("preview %s  %d nodes  %d lint issues  %s  (%.0f s)" % (
+        label, len([n for n in data.get("nodes", []) if n.get("tree") == "swiftui"]), len(data.get("lint") or []),
+        "settled in %.1f s" % float(stable[1]) if stable and stable[0] == "true" else "did NOT settle (captured anyway)",
+        took))
+    print("out:    %s" % out)
+    for name in sorted(os.listdir(out)):
+        if name not in ("snippet.swift", "result.json"):
+            print("        %s" % name)
+
+
+def project_path(ws_id, fs_path):
+    rel = os.path.abspath(fs_path).split(os.sep)
+    res = x_text(x_call("XcodeGlob", {"workspaceIdentifier": ws_id, "pattern": "**/" + rel[-1]}, 60))
+    best, best_score = None, -1
+    matches = res.get("matches", []) if isinstance(res, dict) else []
+    packages = set(res.get("packageDependencies") or []) if isinstance(res, dict) else set()
+    # The workspace's own targets first: package checkouts list the same files again.
+    own = [m for m in matches if "/Packages/" not in m and m.split("/")[0] not in packages]
+    for cand in own or matches:
+        parts = cand.split("/")
+        score = 0
+        while score < min(len(parts), len(rel)) and parts[-1 - score] == rel[-1 - score]:
+            score += 1
+        if score > best_score:
+            best, best_score = cand, score
+    if not best:
+        raise Fail("%s is not in the workspace (regenerate the project?)" % fs_path, 1)
+    return best
+
+
+def guess_scheme(ws_id, fs_path):
+    """The module of the file (the folder above `Sources`) when there is a scheme of that name."""
+    parts = os.path.abspath(fs_path).split(os.sep)
+    if "Sources" not in parts:
+        return None
+    module = parts[len(parts) - 1 - parts[::-1].index("Sources") - 1]
+    res = x_text(x_call("XcodeListSchemes", {"workspaceIdentifier": ws_id}, 60))
+    names = [s.get("name") if isinstance(s, dict) else s for s in (res.get("schemes", []) if isinstance(res, dict) else [])]
+    return module if module in names else None
+
+
+# ---------------------------------------------------------------- main
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return 0
+    cmd, args = argv[0], Args(argv[1:])
+    if cmd in ("version", "--version"):
+        print("li %s (report schema %d)" % (LI_VERSION, SCHEMA_VERSION))
+        return 0
+    if cmd == "mode" and args.pos:
+        cmd, args = args.pos[0], Args(argv[2:])
+    mode = MODE_ALIASES.get(cmd, cmd)
+    if cmd == "measure" and (args.pos or any(k in args.opt for k in ("--text", "--id", "--label", "--type", "--node"))):
+        cmd_measure(args)
+    elif mode in MODES:
+        cmd_mode(args, mode)
+    elif cmd in ("off", "refresh", "close", "status"):
+        cmd_simple(args, cmd)
+    elif cmd == "query":
+        cmd_query(args)
+    elif cmd == "measure":
+        cmd_measure(args)
+    elif cmd == "dirs":
+        cmd_dirs(args)
+    elif cmd == "preview":
+        cmd_preview(args)
+    elif cmd == "bridge":
+        cmd_bridge(args)
+    elif cmd == "_xcall":
+        cmd_xcall(args)
+    else:
+        raise Fail("unknown command %s; li --help" % cmd)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except Fail as e:
+        print("li: %s" % e, file=sys.stderr)
+        sys.exit(e.code)
+    except (ValueError, IndexError) as e:
+        print("li: bad argument (%s); li --help" % e, file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        sys.exit(130)

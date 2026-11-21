@@ -35,7 +35,7 @@ and the data comes from the SwiftUI runtime — the same debug graph Xcode's vie
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.5"),
+.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.6"),
 
 .target(name: "App", dependencies: [
     .product(name: "LayoutInspector", package: "SwiftUILayoutInspector"),
@@ -177,7 +177,7 @@ computed while navigating; the button shows the capture's progress.
   API:
 
   ```swift
-  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.5", traits: []),
+  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.6", traits: []),
   ```
 
   Package traits apply to every build configuration. To keep the inspector in Debug and drop it from Release,
@@ -248,26 +248,43 @@ overlay shows up a moment after the screen. Xcode's own snapshot of a preview (X
 is taken earlier and shows the button with the capture's progress. To get the numbers or a picture without the
 canvas, run code instead.
 
-## Coding agents and Xcode MCP
+## Coding agents and scripts
 
-Xcode's MCP tool `RunCodeSnippet` runs code in the context of a source file, in the same kind of process as
-previews. An agent can inspect any screen of a target that links the library this way, without changing the
-project and without the modifier:
+An agent that writes a screen can measure it without tapping the simulator or reading pixels off a screenshot.
+Full reference, with the JSON schema: [Docs/Agents.md](Docs/Agents.md).
+
+**On the simulator.** An app that calls `bootstrap()` listens to commands from the Mac, one Darwin notification
+each, and after the first one writes report files after every capture:
+
+```bash
+xcrun simctl spawn <udid> notifyutil -p dev.layoutinspector.mode.spacing   # or .<bundle id>.mode.spacing
+ls ~/Library/Caches/LayoutInspector/<udid>/<bundle id>/
+# report.txt  capture.json  status.json
+```
+
+`report.txt` is the text of "Share report". `capture.json` has every view with its frame in window points, type,
+component, text and font, paddings (declared and measured), stack spacing and real gaps, frame rules and the lint
+issues. `status.json` has the mode, the capture number, its duration and the versions. Commands: `mode.<mode>`,
+`off`, `refresh`, `close`, `status`.
+
+**`Tools/li`** wraps it in one Python 3 file with no dependencies:
+
+```bash
+Tools/li spacing --device <udid>          # switch the mode, wait for the capture, copy the files + a screenshot
+Tools/li query --text "Anna Petrova"      # frame, font, paddings, gaps and neighbours of one element
+Tools/li measure "text:Anna Petrova" "text:@anna.designs"    # the distance, as the Measure mode draws it
+Tools/li preview ProfileScreen.swift --preview "Profile" --mode spacing   # a #Preview, through headless Xcode
+```
+
+**Without an app.** `LayoutInspector.snapshot(_:)` lays a view out in a window of its own, waits until it settles
+and captures it. Run it from Xcode's `RunCodeSnippet` (the MCP tool runs code in the context of a source file, in
+the same kind of process as previews) or from a test:
 
 ```swift
-// RunCodeSnippet, sourceFilePath: the file that declares ProfileScreen
-let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
-window.rootViewController = UIHostingController(rootView: ProfileScreen())
-window.isHidden = false
-window.layoutIfNeeded()
-
-let layout = LayoutInspector.capture(window)
-print(layout.report())
-print(layout.lintIssues().map(\.message).joined(separator: "\n"))
-
-// The screen with an overlay, for agents that read images
-let image = InspectorImageRenderer.image(of: window, capture: layout, options: InspectorRenderOptions(mode: .spacing))
-try image.pngData()!.write(to: URL(fileURLWithPath: "/tmp/ProfileScreen-spacing.png"))
+let snapshot = await LayoutInspector.snapshot(ProfileScreen())
+print(snapshot.report)
+try snapshot.write(to: URL(fileURLWithPath: "/tmp/profile"), modes: [.spacing])   // report, JSON, spacing.png
+snapshot.close()
 ```
 
 ```
@@ -282,7 +299,7 @@ ProfileScreen  [@ 0,0 402×874]
         …
 ```
 
-The snippet's window has no scene: no safe area, no status bar. Give screens that load data the same
+A `#Preview` with `.layoutInspector(…)` writes the same report files. Give screens that load data the same
 fixtures as their previews.
 
 ## How it works
