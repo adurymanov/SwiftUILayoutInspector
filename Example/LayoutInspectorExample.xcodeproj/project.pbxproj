@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		16E23F0D20CBEACDF6256C5A /* LayoutInspector in Frameworks */ = {isa = PBXBuildFile; productRef = 0F561AC482C44DF244FEC975 /* LayoutInspector */; };
+		1D197AF344C7C136608BA430 /* HeavyConformances.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E1A30567D883AE4C908370 /* HeavyConformances.swift */; };
 		3124FE3872C31C20B8FE006C /* OverlayWindowPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A53963DB5E8D22189E1FF70 /* OverlayWindowPresenter.swift */; };
 		331246D606F00CED407DC890 /* ScreenHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46CB109B73C950E179D3D242 /* ScreenHarness.swift */; };
 		41ADC5C82DBC31AB671BDBB8 /* BenchmarkApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C028735499EBCC2FBC10C7C /* BenchmarkApp.swift */; };
@@ -69,6 +70,7 @@
 		95A354647A28F6FEB220A0D1 /* DemoScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoScreen.swift; sourceTree = "<group>"; };
 		964F5100413CB4824C8F2D69 /* GlassScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassScreen.swift; sourceTree = "<group>"; };
 		9F5CCA075CF7153BF8799FBA /* QueryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryTests.swift; sourceTree = "<group>"; };
+		A5E1A30567D883AE4C908370 /* HeavyConformances.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeavyConformances.swift; sourceTree = "<group>"; };
 		AE86315FC1960613DFA134FB /* PromoScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromoScreen.swift; sourceTree = "<group>"; };
 		C447BB96B014B65F8A4E0BA2 /* DemoCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoCatalog.swift; sourceTree = "<group>"; };
 		C89B84AF92FF6D7852093555 /* RawDumpTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawDumpTests.swift; sourceTree = "<group>"; };
@@ -166,6 +168,7 @@
 				28A4A29400259CB7E6901547 /* DashboardScreen.swift */,
 				E8545EFD094C49A997044698 /* FeedScreen.swift */,
 				964F5100413CB4824C8F2D69 /* GlassScreen.swift */,
+				A5E1A30567D883AE4C908370 /* HeavyConformances.swift */,
 				06AD2601BBE41E3ACE53F2A4 /* HeavyScreen.swift */,
 				6D00298E59D10603FB7A3D64 /* ProfileScreen.swift */,
 				AE86315FC1960613DFA134FB /* PromoScreen.swift */,
@@ -318,6 +321,7 @@
 				5F535E6180F0B17119E2C897 /* DemoScreen.swift in Sources */,
 				D9AD218C1A62681C3E134511 /* FeedScreen.swift in Sources */,
 				792D83063C21D68175E4068D /* GlassScreen.swift in Sources */,
+				1D197AF344C7C136608BA430 /* HeavyConformances.swift in Sources */,
 				603A99353A283789B354882E /* HeavyScreen.swift in Sources */,
 				8A53434B8C96A22F9A91244D /* InspectorDemoApp.swift in Sources */,
 				3124FE3872C31C20B8FE006C /* OverlayWindowPresenter.swift in Sources */,

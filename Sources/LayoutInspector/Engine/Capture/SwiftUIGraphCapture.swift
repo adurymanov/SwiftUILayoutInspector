@@ -149,6 +149,38 @@ final class SwiftUITreeBuilder {
         weak var parent: InspectorNode?
         /// The offset `rect` was measured with.
         var rectOffset: CGPoint = .zero
+        /// `.offset` translations since the last view with its own geometry. Positions below an `.offset` already
+        /// include it, so only views without geometry of their own (a glass, a component) are moved by it.
+        var moved: CGSize = .zero
+    }
+
+    /// Modifiers after which `_ViewDebug` measures positions from the modifier itself (iOS 18, 26 and 27 alike):
+    /// Liquid Glass, the geometry and drawing groups and the transform effects.
+    private static let coordinateSpaceModifiers: Set<String> = [
+        "GlassEffectModifier", "_GeometryGroupEffect", "_DrawingGroupEffect", "_ScaleEffect", "_RotationEffect",
+        "_Rotation3DEffect", "_TransformEffect", "_ProjectionEffect",
+    ]
+
+    /// Modifiers that do it only when their effect moves the content (`.visualEffect` and `.scrollTransition` with
+    /// a scale or an offset do, with only an opacity they do not), and SwiftUI's geometry effects the probes did not
+    /// cover.
+    private static let contentDependentSpaceModifiers: Set<String> = [
+        "VisualEffectModifier", "ScrollTransitionModifier", "_FlipForRTLEffect", "_IgnoredByLayoutEffect",
+    ]
+
+    /// Positions below `raw` are measured from `raw`. For the modifiers that do it only sometimes, and for an app's
+    /// own `GeometryEffect`, the geometry tells: the first measured view below lies inside `raw` only when its
+    /// position is taken from `raw`'s corner.
+    static func opensCoordinateSpace(_ raw: RawDebugNode) -> Bool {
+        guard !raw.isSynthetic else { return false }
+        let isApp = TypeNames.isAppType(raw.typeName)
+        let name = TypeNames.shortName(of: raw.typeName)
+        if !isApp, coordinateSpaceModifiers.contains(name) { return true }
+        guard isApp || contentDependentSpaceModifiers.contains(name), let outer = raw.geometry, outer.origin != .zero,
+              let inner = raw.children.lazy.compactMap({ $0.firstGeometry }).first else { return false }
+        // Even with a translation (`visualEffect { $0.offset(x: 10) }`) the content is reported at the corner.
+        return !outer.insetBy(dx: -1, dy: -1).contains(inner)
+            && CGRect(origin: .zero, size: outer.size).insetBy(dx: -1, dy: -1).contains(inner)
     }
 
     private static func isSwiftUI(_ raw: RawDebugNode, _ name: String) -> Bool {
@@ -176,23 +208,26 @@ final class SwiftUITreeBuilder {
         if let g = raw.geometry {
             ctx.rect = g.offsetBy(dx: ctx.offset.x, dy: ctx.offset.y)
             ctx.rectOffset = ctx.offset
+            ctx.moved = .zero
         }
-        // iOS 26+: positions below `.glassEffect` are measured from the glass. The content of a
-        // `GlassEffectContainer` stays in the space around it; its storage (SwiftUI drawing the glass) is
-        // measured from the container and left out. Under `.offset` the glass has no geometry: it sits where
-        // its parent was measured, moved by the offset, and so does a component whose body starts with it.
+        // Positions below `.glassEffect`, `.geometryGroup()` and the like are measured from the modifier (see
+        // `opensCoordinateSpace`). The content of a `GlassEffectContainer` stays in the space around it; its storage
+        // (SwiftUI drawing the glass) is measured from the container and left out. Under `.offset` the glass has
+        // no geometry: it sits where its parent was measured, moved by the offset (`moved`), and so does a
+        // component whose body starts with it.
         if Self.isSwiftUI(raw, "ContainerStorageView") { return }
-        let isGlassEffect = Self.isSwiftUI(raw, "GlassEffectModifier")
-        if isGlassEffect || raw.isSynthetic {
-            ctx.rect.origin.x += ctx.offset.x - ctx.rectOffset.x
-            ctx.rect.origin.y += ctx.offset.y - ctx.rectOffset.y
+        let opensSpace = Self.opensCoordinateSpace(raw)
+        if opensSpace || raw.isSynthetic {
+            ctx.rect.origin.x += ctx.offset.x - ctx.rectOffset.x + ctx.moved.width
+            ctx.rect.origin.y += ctx.offset.y - ctx.rectOffset.y + ctx.moved.height
             ctx.rectOffset = ctx.offset
+            ctx.moved = .zero
         }
 
         let classification = classify(raw, ctx)
         var childCtx = ctx
         childCtx.parentReadable = raw.readable
-        if isGlassEffect {
+        if opensSpace {
             childCtx.offset = ctx.rect.origin
             childCtx.rectOffset = ctx.rect.origin
         }
@@ -205,8 +240,8 @@ final class SwiftUITreeBuilder {
             childCtx.decorations.append(text)
 
         case let .offset(size):
-            childCtx.offset.x += size.width
-            childCtx.offset.y += size.height
+            childCtx.moved.width += size.width
+            childCtx.moved.height += size.height
             let node = makeNode(raw, ctx, kind: .offset, title: ".offset",
                                 detail: "x \(size.width.pt) y \(size.height.pt)")
             node.info.offset = size
@@ -218,6 +253,7 @@ final class SwiftUITreeBuilder {
                 childCtx.space = scroll
                 childCtx.offset = .zero
                 childCtx.rectOffset = .zero
+                childCtx.moved = .zero
                 childCtx.rect = CGRect(origin: .zero, size: scroll.contentSize)
             }
 

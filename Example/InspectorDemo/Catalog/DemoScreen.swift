@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
-    case profile, feed, checkout, dashboard, promo, glass, heavy
+    case profile, feed, checkout, dashboard, promo, glass, spaces, heavy
 
     var id: String { rawValue }
 
@@ -13,6 +13,7 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .dashboard: "Dashboard (Grid)"
         case .promo: "UIKit interop"
         case .glass: "Liquid Glass"
+        case .spaces: "Coordinate spaces"
         case .heavy: "Heavy home"
         }
     }
@@ -25,6 +26,7 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .dashboard: "LazyVGrid, fixed frames, layoutPriority, lint issues"
         case .promo: "UIViewRepresentable with Auto Layout & UIStackView"
         case .glass: "glassEffect, GlassEffectContainer, widget card (iOS 26+)"
+        case .spaces: "geometryGroup, drawingGroup, transform and visual effects"
         case .heavy: "A big app's home: many views, large models, glass – for timing"
         }
     }
@@ -37,6 +39,7 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .dashboard: "chart.bar.xaxis"
         case .promo: "uiwindow.split.2x1"
         case .glass: "drop.halffull"
+        case .spaces: "square.3.layers.3d"
         case .heavy: "gauge.with.dots.needle.67percent"
         }
     }
@@ -54,6 +57,7 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
             } else {
                 ContentUnavailableView("Needs iOS 26", systemImage: "drop.halffull")
             }
+        case .spaces: SpacesScreen()
         case .heavy: HeavyScreen()
         }
     }

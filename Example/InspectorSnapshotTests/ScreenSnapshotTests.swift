@@ -80,6 +80,31 @@ final class ScreenSnapshotTests: XCTestCase {
         ArtifactWriter.write(ContactSheet.make(title: DemoScreen.glass.title, items: sheet, columns: 4), name: DemoScreen.glass.rawValue)
     }
 
+    /// Under `.geometryGroup()`, `.drawingGroup()`, the transform effects, `.visualEffect` and a custom
+    /// `GeometryEffect` SwiftUI may measure positions from the modifier, and below `.offset` they already include
+    /// it. Every card's title still starts inside its padding, one card below the other; `.compositingGroup()`, which
+    /// keeps the outer space, is not shifted either.
+    func test_spaces() async throws {
+        let harness = ScreenHarness(DemoScreen.spaces.view)
+        defer { harness.tearDown() }
+        let capture = try await harness.waitUntilLoaded()
+        XCTAssertTrue(capture.isSwiftUIGraphAvailable, "SWIFTUI_VIEW_DEBUG is not enabled")
+
+        // ScrollView padding 16 + card padding 20, and `.offset(x: 8)` on the last two.
+        let titles: [(String, CGFloat)] = [
+            ("$0.00", 36), ("Drawing group", 36), ("Scaled", 36), ("Rotated", 36), ("Visual effect", 36),
+            ("Custom effect", 36), ("Compositing group", 36), ("Moved", 44), ("Scaled and moved", 44),
+        ]
+        var previous: CGRect?
+        for (title, x) in titles {
+            guard let text = capture.find(title, kind: .text) else { XCTFail("no \(title)"); continue }
+            XCTAssertEqual(text.frame.minX, x, accuracy: 0.5, title)
+            if let previous { XCTAssertGreaterThan(text.frame.minY, previous.maxY + 20, title) }
+            previous = text.frame
+        }
+        assertSnapshot(of: LayoutReport.text(for: capture), as: .lines, named: "report")
+    }
+
     /// Same screen with the SwiftUI graph unavailable would only show the render tree; here we check the
     /// text report ("layout snapshot") – stable and diff-able, no pixels involved.
     func test_profile_textReport() async throws {

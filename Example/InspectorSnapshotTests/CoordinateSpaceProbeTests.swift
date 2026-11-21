@@ -55,6 +55,11 @@ final class CoordinateSpaceProbeTests: XCTestCase {
                     Card(label: "nestedGroups").geometryGroup().padding(4).geometryGroup()
                     Wrapper()
                     Card(label: "groupUnderOffset").geometryGroup().offset(x: 5)
+                    Card(label: "visualEffectMoved").visualEffect { c, _ in c.offset(x: 10) }
+                    Card(label: "scrollTransitionMoved").scrollTransition { c, _ in c.offset(x: 10) }
+                    Card(label: "customEffectMoved").modifier(Shift(dx: 10))
+                    Card(label: "scaleThenOffset").scaleEffect(0.95).offset(x: 8)
+                    Card(label: "flipRTL").flipsForRightToLeftLayoutDirection(true)
                     glassRow
                 }
                 .padding(.leading, 40)

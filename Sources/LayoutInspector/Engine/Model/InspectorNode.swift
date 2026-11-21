@@ -60,9 +60,10 @@ public struct EdgeValues: Equatable, Sendable {
     public static let zero = EdgeValues()
     public var isZero: Bool { abs(top) < 0.01 && abs(leading) < 0.01 && abs(bottom) < 0.01 && abs(trailing) < 0.01 }
     public var compact: String {
-        let v = [top, leading, bottom, trailing]
-        if Set(v).count == 1 { return v[0].pt }
-        if top == bottom && leading == trailing { return "v \(top.pt) · h \(leading.pt)" }
+        // Compared as printed: insets measured inside a moved coordinate space carry float noise.
+        let v = [top, leading, bottom, trailing].map(\.pt)
+        if Set(v).count == 1 { return v[0] }
+        if v[0] == v[2] && v[1] == v[3] { return "v \(top.pt) · h \(leading.pt)" }
         return "t \(top.pt) · l \(leading.pt) · b \(bottom.pt) · r \(trailing.pt)"
     }
 }
