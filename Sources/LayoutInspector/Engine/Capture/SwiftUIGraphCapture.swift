@@ -138,6 +138,12 @@ final class SwiftUITreeBuilder {
         var controlBase: String?
         var decorations: [String] = []
         weak var parent: InspectorNode?
+        /// The offset `rect` was measured with.
+        var rectOffset: CGPoint = .zero
+    }
+
+    private static func isSwiftUI(_ raw: RawDebugNode, _ name: String) -> Bool {
+        TypeNames.shortName(of: raw.typeName) == name && !TypeNames.isAppType(raw.typeName)
     }
 
     func build(roots: [RawDebugNode]) -> InspectorNode {
@@ -160,11 +166,27 @@ final class SwiftUITreeBuilder {
         var ctx = incoming
         if let g = raw.geometry {
             ctx.rect = g.offsetBy(dx: ctx.offset.x, dy: ctx.offset.y)
+            ctx.rectOffset = ctx.offset
+        }
+        // iOS 26+: positions below `.glassEffect` are measured from the glass. The content of a
+        // `GlassEffectContainer` stays in the space around it; its storage (SwiftUI drawing the glass) is
+        // measured from the container and left out. Under `.offset` the glass has no geometry: it sits where
+        // its parent was measured, moved by the offset, and so does a component whose body starts with it.
+        if Self.isSwiftUI(raw, "ContainerStorageView") { return }
+        let isGlassEffect = Self.isSwiftUI(raw, "GlassEffectModifier")
+        if isGlassEffect || raw.isSynthetic {
+            ctx.rect.origin.x += ctx.offset.x - ctx.rectOffset.x
+            ctx.rect.origin.y += ctx.offset.y - ctx.rectOffset.y
+            ctx.rectOffset = ctx.offset
         }
 
         let classification = classify(raw, ctx)
         var childCtx = ctx
         childCtx.parentReadable = raw.readable
+        if isGlassEffect {
+            childCtx.offset = ctx.rect.origin
+            childCtx.rectOffset = ctx.rect.origin
+        }
 
         switch classification {
         case .skipSubtree:
@@ -186,6 +208,7 @@ final class SwiftUITreeBuilder {
             if let scroll = matchScrollView(for: ctx) {
                 childCtx.space = scroll
                 childCtx.offset = .zero
+                childCtx.rectOffset = .zero
                 childCtx.rect = CGRect(origin: .zero, size: scroll.contentSize)
             }
 

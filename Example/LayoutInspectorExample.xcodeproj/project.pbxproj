@@ -16,6 +16,7 @@
 		5A881A47C446BFB48A187037 /* CheckoutScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 233204CA8FC14371E1FC38FE /* CheckoutScreen.swift */; };
 		5F535E6180F0B17119E2C897 /* DemoScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95A354647A28F6FEB220A0D1 /* DemoScreen.swift */; };
 		674FD3AC043F382481F50ABA /* QueryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F5CCA075CF7153BF8799FBA /* QueryTests.swift */; };
+		792D83063C21D68175E4068D /* GlassScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 964F5100413CB4824C8F2D69 /* GlassScreen.swift */; };
 		7ABF6EDB8E678B1C86828E8F /* ProfileScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D00298E59D10603FB7A3D64 /* ProfileScreen.swift */; };
 		8A53434B8C96A22F9A91244D /* InspectorDemoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4479B745CC5644C1AC7070D /* InspectorDemoApp.swift */; };
 		93A4268125ED1E20C36E795D /* LayoutInspector in Frameworks */ = {isa = PBXBuildFile; productRef = 69B865B20AD2C7103E731CD3 /* LayoutInspector */; };
@@ -57,6 +58,7 @@
 		6A53963DB5E8D22189E1FF70 /* OverlayWindowPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayWindowPresenter.swift; sourceTree = "<group>"; };
 		6D00298E59D10603FB7A3D64 /* ProfileScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileScreen.swift; sourceTree = "<group>"; };
 		95A354647A28F6FEB220A0D1 /* DemoScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoScreen.swift; sourceTree = "<group>"; };
+		964F5100413CB4824C8F2D69 /* GlassScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassScreen.swift; sourceTree = "<group>"; };
 		9F5CCA075CF7153BF8799FBA /* QueryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryTests.swift; sourceTree = "<group>"; };
 		AE86315FC1960613DFA134FB /* PromoScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromoScreen.swift; sourceTree = "<group>"; };
 		BE869E78F6D41A83EE004607 /* swiftui-layout-inspector */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swiftui-layout-inspector"; path = ..; sourceTree = SOURCE_ROOT; };
@@ -150,6 +152,7 @@
 				233204CA8FC14371E1FC38FE /* CheckoutScreen.swift */,
 				28A4A29400259CB7E6901547 /* DashboardScreen.swift */,
 				E8545EFD094C49A997044698 /* FeedScreen.swift */,
+				964F5100413CB4824C8F2D69 /* GlassScreen.swift */,
 				6D00298E59D10603FB7A3D64 /* ProfileScreen.swift */,
 				AE86315FC1960613DFA134FB /* PromoScreen.swift */,
 			);
@@ -299,6 +302,7 @@
 				41DC308100ECF11E5EED28BC /* DemoCatalog.swift in Sources */,
 				5F535E6180F0B17119E2C897 /* DemoScreen.swift in Sources */,
 				D9AD218C1A62681C3E134511 /* FeedScreen.swift in Sources */,
+				792D83063C21D68175E4068D /* GlassScreen.swift in Sources */,
 				8A53434B8C96A22F9A91244D /* InspectorDemoApp.swift in Sources */,
 				3124FE3872C31C20B8FE006C /* OverlayWindowPresenter.swift in Sources */,
 				7ABF6EDB8E678B1C86828E8F /* ProfileScreen.swift in Sources */,

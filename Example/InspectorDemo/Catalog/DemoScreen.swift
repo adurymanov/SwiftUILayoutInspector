@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
-    case profile, feed, checkout, dashboard, promo
+    case profile, feed, checkout, dashboard, promo, glass
 
     var id: String { rawValue }
 
@@ -12,6 +12,7 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .checkout: "Checkout (Form)"
         case .dashboard: "Dashboard (Grid)"
         case .promo: "UIKit interop"
+        case .glass: "Liquid Glass"
         }
     }
 
@@ -22,6 +23,7 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .checkout: "Form, TextField/Toggle (UIKit-backed), safeAreaInset"
         case .dashboard: "LazyVGrid, fixed frames, layoutPriority, lint issues"
         case .promo: "UIViewRepresentable with Auto Layout & UIStackView"
+        case .glass: "glassEffect, GlassEffectContainer, widget card (iOS 26+)"
         }
     }
 
@@ -32,6 +34,7 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .checkout: "cart"
         case .dashboard: "chart.bar.xaxis"
         case .promo: "uiwindow.split.2x1"
+        case .glass: "drop.halffull"
         }
     }
 
@@ -42,6 +45,12 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .checkout: CheckoutScreen()
         case .dashboard: DashboardScreen()
         case .promo: PromoScreen()
+        case .glass:
+            if #available(iOS 26.0, *) {
+                GlassScreen()
+            } else {
+                ContentUnavailableView("Needs iOS 26", systemImage: "drop.halffull")
+            }
         }
     }
 }

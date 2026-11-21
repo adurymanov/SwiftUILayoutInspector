@@ -35,7 +35,7 @@ and the data comes from the SwiftUI runtime — the same debug graph Xcode's vie
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.0"),
+.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.2"),
 
 .target(name: "App", dependencies: [
     .product(name: "LayoutInspector", package: "SwiftUILayoutInspector"),
@@ -177,7 +177,7 @@ computed while navigating; the button shows the capture's progress.
   API:
 
   ```swift
-  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.0", traits: []),
+  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.2", traits: []),
   ```
 
   Package traits apply to every build configuration. To keep the inspector in Debug and drop it from Release,

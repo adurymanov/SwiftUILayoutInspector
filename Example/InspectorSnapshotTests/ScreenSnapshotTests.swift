@@ -44,6 +44,42 @@ final class ScreenSnapshotTests: XCTestCase {
         }
     }
 
+    /// On iOS 26+ `_ViewDebug` measures what sits under `.glassEffect` from the glass. Each card's texts must
+    /// land inside its padding. The image snapshots are left out: the glass renders slightly differently
+    /// from run to run.
+    func test_glass() async throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("Liquid Glass needs iOS 26") }
+        let harness = ScreenHarness(DemoScreen.glass.view)
+        defer { harness.tearDown() }
+        let capture = try await harness.waitUntilLoaded()
+        XCTAssertTrue(capture.isSwiftUIGraphAvailable, "SWIFTUI_VIEW_DEBUG is not enabled")
+
+        let cards: [(title: String, count: Int, padding: CGSize, texts: Int)] = [
+            ("BalanceCard", 1, CGSize(width: 20, height: 20), 3),
+            ("QuickAction", 2, CGSize(width: 20, height: 14), 1),
+            ("PlainCard", 1, CGSize(width: 20, height: 20), 2),
+            ("TransactionsCard", 1, CGSize(width: 20, height: 20), 8),
+        ]
+        for card in cards {
+            let nodes = capture.nodes(.component).filter { $0.title == card.title }
+            XCTAssertEqual(nodes.count, card.count, card.title)
+            for node in nodes {
+                let content = node.frame.insetBy(dx: card.padding.width - 0.5, dy: card.padding.height - 0.5)
+                var texts: [InspectorNode] = []
+                node.forEach { if $0.kind == .text { texts.append($0) } }
+                XCTAssertEqual(texts.count, card.texts, card.title)
+                for text in texts {
+                    XCTAssertTrue(content.contains(text.frame),
+                                  "\(text.info.text?.string ?? "") \(text.frame) is outside the padding of \(card.title) \(node.frame)")
+                }
+            }
+        }
+        assertSnapshot(of: LayoutReport.text(for: capture), as: .lines, named: "report")
+
+        let sheet = Self.modes.map { mode in (mode?.title ?? "Screen", harness.image(capture, mode: mode)) }
+        ArtifactWriter.write(ContactSheet.make(title: DemoScreen.glass.title, items: sheet, columns: 4), name: DemoScreen.glass.rawValue)
+    }
+
     /// Same screen with the SwiftUI graph unavailable would only show the render tree; here we check the
     /// text report ("layout snapshot") – stable and diff-able, no pixels involved.
     func test_profile_textReport() async throws {
