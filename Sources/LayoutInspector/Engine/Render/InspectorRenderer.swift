@@ -14,6 +14,8 @@ public struct InspectorRenderOptions {
     public var lintRules = LayoutInspector.LintRules()
     /// Space kept free at the bottom for info cards (lint results, measure hint).
     public var cardBottomInset: CGFloat = 40
+    /// Body evaluations per component in ``LayoutInspector/Mode/rerenders``; `nil` until the first count.
+    var renderCounts: RenderCounts?
 
     public init(mode: LayoutInspector.Mode = .components) { self.mode = mode }
 
@@ -93,6 +95,7 @@ struct InspectorRenderer {
         case .uikit: drawUIKit(ctx, tags)
         case .lint: drawLint(ctx, tags)
         case .measure: drawMeasure(ctx, tags)
+        case .rerenders: drawRerenders(ctx, tags)
         }
 
         if options.mode != .measure, let id = options.selectedID, let node = capture.node(withID: id), node.isVisible {
@@ -100,7 +103,7 @@ struct InspectorRenderer {
         }
     }
 
-    private var nodes: [InspectorNode] {
+    var nodes: [InspectorNode] {
         capture.isSwiftUIGraphAvailable ? capture.swiftUINodes.filter { $0.isVisible && $0.frame.intersects(bounds) } : []
     }
 
@@ -634,7 +637,7 @@ struct InspectorRenderer {
         ctx.restoreGState()
     }
 
-    private func banner(_ ctx: CGContext, _ text: String, color: UIColor) {
+    func banner(_ ctx: CGContext, _ text: String, color: UIColor) {
         let font = UIFont.systemFont(ofSize: 11, weight: .semibold)
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.black]
         let size = (text as NSString).boundingRect(with: CGSize(width: bounds.width - 32, height: 100), options: .usesLineFragmentOrigin, attributes: attrs, context: nil).size
@@ -643,7 +646,7 @@ struct InspectorRenderer {
         (text as NSString).draw(with: r.insetBy(dx: 8, dy: 6), options: .usesLineFragmentOrigin, attributes: attrs, context: nil)
     }
 
-    private func card(_ ctx: CGContext, title: String, lines: [String]) {
+    func card(_ ctx: CGContext, title: String, lines: [String]) {
         let titleFont = UIFont.systemFont(ofSize: 12, weight: .bold)
         let font = UIFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .medium)
         let width = bounds.width - 24

@@ -54,6 +54,8 @@ final class InspectorSession: ObservableObject {
     @Published private(set) var isHighlighting: Bool
     /// Progress of the capture in flight, 0…1; `nil` when none is running.
     @Published private(set) var captureProgress: Double?
+    /// Body evaluations per component while ``LayoutInspector/Mode/rerenders`` is on; `nil` otherwise.
+    @Published private(set) var renderCounts: RenderCounts?
 
     /// Called when the configuration is changed from the toolbar (not from `apply(_:)`).
     var onConfigurationChange: ((LayoutInspector.Configuration) -> Void)?
@@ -89,7 +91,10 @@ final class InspectorSession: ObservableObject {
     /// The number of the last command from the Mac when the capture in flight started (see `AgentControl`).
     private var jobCommand = 0
     private var stepScheduled = false
-    private var cachedReport: (capture: ObjectIdentifier, text: String)?
+    private var cachedReport: (capture: ObjectIdentifier, counts: RenderCounts?, text: String)?
+    /// Counts body evaluations; profiling runs only in `.rerenders` (see `updateProfiling()`).
+    private var heatmap: RenderHeatmap?
+    private var lastCountRead: CFTimeInterval = 0
 
     init(configuration: LayoutInspector.Configuration) {
         self.configuration = configuration
@@ -165,6 +170,7 @@ final class InspectorSession: ObservableObject {
         if old.mode != configuration.mode { measureTargetID = nil }
         if old.isEnabled != configuration.isEnabled { updateVisibility() }
         if old.autoRefresh != configuration.autoRefresh, configuration.autoRefresh { dirtySince = CACurrentMediaTime() }
+        updateProfiling()
         syncOptions()
     }
 
@@ -172,6 +178,7 @@ final class InspectorSession: ObservableObject {
         var options = InspectorRenderOptions(configuration)
         options.selectedID = selectedID
         options.measureTargetID = measureTargetID
+        options.renderCounts = renderCounts
         if let pillTop {
             let bottom = overlay.scope.map { min($0.maxY, overlay.bounds.maxY) } ?? overlay.bounds.maxY
             options.cardBottomInset = max(24, bottom - pillTop + 8)
@@ -202,6 +209,8 @@ final class InspectorSession: ObservableObject {
 
     func tearDown() {
         setFrontmost(false)
+        heatmap?.profiler.stop()
+        heatmap = nil
         window?.isHidden = true
         window = nil
         capture = nil
@@ -234,6 +243,7 @@ final class InspectorSession: ObservableObject {
             overlay.transform = .identity
             stopDisplayLink()
         }
+        updateProfiling()
     }
 
     private func startDisplayLink() {
@@ -285,6 +295,7 @@ final class InspectorSession: ObservableObject {
         configuration.mode = mode
         guard !isHighlighting else { return }
         isHighlighting = true
+        updateProfiling()
         beginCapture()
     }
 
@@ -304,6 +315,7 @@ final class InspectorSession: ObservableObject {
         overlay.capture = nil
         selectedID = nil
         measureTargetID = nil
+        updateProfiling()
     }
 
     /// Steps run on a fresh main-queue turn, outside of the display-link callback and of SwiftUI transactions,
@@ -350,6 +362,7 @@ final class InspectorSession: ObservableObject {
             selectedID = match?.id
         }
         overlay.capture = capture
+        if heatmap != nil { readRenderCounts() }
         AgentReports.didFinish(capture, session: self, afterCommand: jobCommand)
     }
 
@@ -357,10 +370,66 @@ final class InspectorSession: ObservableObject {
 
     var reportText: String? {
         guard let capture else { return nil }
-        if let cachedReport, cachedReport.capture == ObjectIdentifier(capture) { return cachedReport.text }
-        let text = LayoutReport.text(for: capture)
-        cachedReport = (ObjectIdentifier(capture), text)
+        if let cachedReport, cachedReport.capture == ObjectIdentifier(capture), cachedReport.counts == renderCounts {
+            return cachedReport.text
+        }
+        var options = LayoutReport.Options()
+        options.renderCounts = renderCounts
+        let text = LayoutReport.text(for: capture, options: options)
+        cachedReport = (ObjectIdentifier(capture), renderCounts, text)
         return text
+    }
+
+    // MARK: - Re-renders
+
+    private static let logs = ProcessInfo.processInfo.environment["LAYOUT_INSPECTOR_LOG"] != nil
+
+    /// Profiling runs while this session is on screen and highlights in `.rerenders`, and only then.
+    private var shouldProfile: Bool {
+        isFrontmost && configuration.isEnabled && isHighlighting && configuration.mode == .rerenders && RenderProfiler.isAvailable
+    }
+
+    var isProfiling: Bool { heatmap?.profiler.isRunning == true }
+
+    private func updateProfiling() {
+        if shouldProfile {
+            guard heatmap == nil, let target else { return }
+            let heatmap = RenderHeatmap()
+            heatmap.profiler.start(hosts: LayoutCapture.visibleHostingViews(in: target, excluding: excluded))
+            self.heatmap = heatmap
+            renderCounts = RenderCounts()
+            readRenderCounts()
+        } else if let heatmap {
+            heatmap.profiler.stop()
+            self.heatmap = nil
+            renderCounts = nil
+            syncOptions()
+        }
+    }
+
+    /// Counts from zero again.
+    func resetRenderCounts() {
+        guard let heatmap else { return }
+        heatmap.profiler.reset()
+        readRenderCounts()
+    }
+
+    /// Maps the last capture's components to their graph nodes (once per capture) and reads their counts. Geometry is
+    /// the last capture's: nothing is captured for the counts.
+    private func readRenderCounts() {
+        guard let heatmap else { return }
+        lastCountRead = CACurrentMediaTime()
+        if let target { heatmap.profiler.add(hosts: LayoutCapture.visibleHostingViews(in: target, excluding: excluded)) }
+        guard let capture else { return }
+        heatmap.map(capture)
+        let counts = heatmap.read()
+        if Self.logs {
+            NSLog("%@", "LayoutInspector re-renders: map \(Int(heatmap.lastMapDuration * 1000)) ms, "
+                  + "read \(Int(heatmap.lastReadDuration * 1000)) ms, \(counts.byNode.count) views")
+        }
+        guard counts != renderCounts else { return }
+        renderCounts = counts
+        syncOptions()
     }
 
     // MARK: - Display link
@@ -401,6 +470,8 @@ final class InspectorSession: ObservableObject {
             scheduleCaptureSteps()
             return
         }
+        // Once a second, and never more than 5 % of the time: reading describes the whole graph.
+        if let heatmap, CACurrentMediaTime() - lastCountRead >= max(1, heatmap.lastReadDuration * 20) { readRenderCounts() }
         guard isHighlighting, configuration.autoRefresh || capture == nil else { return }
         guard frameCounter % 3 == 0, !isMoving else { return }
         let now = CACurrentMediaTime()

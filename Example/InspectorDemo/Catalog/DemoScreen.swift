@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
-    case profile, feed, checkout, dashboard, promo, glass, spaces, heavy
+    case profile, feed, checkout, dashboard, promo, glass, spaces, heavy, rerenders
 
     var id: String { rawValue }
 
@@ -15,6 +15,7 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .glass: "Liquid Glass"
         case .spaces: "Coordinate spaces"
         case .heavy: "Heavy home"
+        case .rerenders: "Re-renders"
         }
     }
 
@@ -28,6 +29,7 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .glass: "glassEffect, GlassEffectContainer, widget card (iOS 26+)"
         case .spaces: "geometryGroup, drawingGroup, transform and visual effects"
         case .heavy: "A big app's home: many views, large models, glass – for timing"
+        case .rerenders: "@Observable model: only the readers of a changed property update"
         }
     }
 
@@ -41,6 +43,7 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .glass: "drop.halffull"
         case .spaces: "square.3.layers.3d"
         case .heavy: "gauge.with.dots.needle.67percent"
+        case .rerenders: "flame"
         }
     }
 
@@ -59,6 +62,7 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
             }
         case .spaces: SpacesScreen()
         case .heavy: HeavyScreen()
+        case .rerenders: RerenderScreen()
         }
     }
 }

@@ -39,7 +39,7 @@ xcrun simctl spawn <udid> notifyutil -p dev.layoutinspector.<bundle id>.mode.spa
 
 | Command | What it does |
 |---|---|
-| `mode.components`, `mode.spacing`, `mode.typography`, `mode.constraints`, `mode.uikit`, `mode.lint`, `mode.measure` | Highlights the screen in the mode and captures it again. Shows the inspector if it was closed: the window inspector, configured as it was last shown with `LayoutInspector.show(_:)`. |
+| `mode.components`, `mode.spacing`, `mode.typography`, `mode.constraints`, `mode.uikit`, `mode.lint`, `mode.measure`, `mode.rerenders` | Highlights the screen in the mode and captures it again. Shows the inspector if it was closed: the window inspector, configured as it was last shown with `LayoutInspector.show(_:)`. |
 | `off` | Stops highlighting; the button stays. |
 | `refresh` | Captures again in the current mode. |
 | `close` | Closes the inspector, like its Close button. |
@@ -70,7 +70,7 @@ last: when it names a capture, the other two files already hold that capture.
 ```json
 {
   "schemaVersion": 1,
-  "library": "0.2.6",
+  "library": "0.2.7",
   "updated": 1795275048.79,
   "app": { "bundleID": "dev.layoutinspector.example", "process": "InspectorDemo", "pid": 32529, "launchID": "23A0…" },
   "enabled": true,
@@ -94,7 +94,7 @@ last: when it names a capture, the other two files already hold that capture.
 ```json
 {
   "schemaVersion": 1,
-  "library": "0.2.6",
+  "library": "0.2.7",
   "graph": true,
   "space": { "width": 402, "height": 874, "scale": 3 },
   "capture": { "…": "as in status.json" },
@@ -130,6 +130,7 @@ Present when they apply:
 | `image` | `name`, `symbol`, `naturalSize`. |
 | `shape`, `fill`, `decorations` | |
 | `uikit` | UIKit views: `className`, `text`, `font`, `color`, `constraints` (Auto Layout as text), `autoLayout`, `ambiguous`, `stackSpacing`, `appView`. |
+| `renders` | Components while the Re-renders mode is on: `count`, how many times the `body` ran since the mode was turned on or reset, and `views`, how many views of the type share that count (1 = this view's own). Counted up to the capture the file belongs to: `li refresh` writes the counts so far. |
 | `accessibility` | `identifier`, `label`. The app fills it for UIKit views only: SwiftUI builds its accessibility tree only while an accessibility client is connected, and reading it from inside the app costs too much. `li` reads the simulator's accessibility tree from the Mac (with `simtool` or `axe`) and adds it to SwiftUI nodes by frame; it then also writes the elements to a top-level `accessibility` list (`frame`, `identifier`, `label`, `role`, `node`) and sets `"accessibilitySource": "mac"`. |
 
 `schemaVersion` changes when a key is removed or renamed or its meaning changes. New keys don't change it.

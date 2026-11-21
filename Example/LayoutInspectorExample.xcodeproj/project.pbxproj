@@ -11,6 +11,7 @@
 		1D197AF344C7C136608BA430 /* HeavyConformances.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E1A30567D883AE4C908370 /* HeavyConformances.swift */; };
 		23641C8E501EF755140E01E0 /* ComponentNameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2AB5776729EB9C37842F867 /* ComponentNameTests.swift */; };
 		3124FE3872C31C20B8FE006C /* OverlayWindowPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A53963DB5E8D22189E1FF70 /* OverlayWindowPresenter.swift */; };
+		32E8D2F7EC6222FC814B7A25 /* RerenderScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90DB3B34825C88B149ECE208 /* RerenderScreen.swift */; };
 		331246D606F00CED407DC890 /* ScreenHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46CB109B73C950E179D3D242 /* ScreenHarness.swift */; };
 		3A895BA5F9B16B7D23BE4D9A /* HeavyModifierChains.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2D666D44AEF695CC57A480B /* HeavyModifierChains.swift */; };
 		41ADC5C82DBC31AB671BDBB8 /* BenchmarkApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C028735499EBCC2FBC10C7C /* BenchmarkApp.swift */; };
@@ -26,6 +27,7 @@
 		74E933070FD039789DD571A2 /* CaptureTimingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1559B53A6524D6E224108284 /* CaptureTimingTests.swift */; };
 		792D83063C21D68175E4068D /* GlassScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 964F5100413CB4824C8F2D69 /* GlassScreen.swift */; };
 		7ABF6EDB8E678B1C86828E8F /* ProfileScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D00298E59D10603FB7A3D64 /* ProfileScreen.swift */; };
+		83B070BFC55EEE7339263D9A /* RerenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F32EB82AE9C3B6026B7EC00 /* RerenderTests.swift */; };
 		8A53434B8C96A22F9A91244D /* InspectorDemoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4479B745CC5644C1AC7070D /* InspectorDemoApp.swift */; };
 		8D58DECFBFBCA4DD5BE922E4 /* PlacementDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 411AD2DE78E76C15E77681AC /* PlacementDiagnostics.swift */; };
 		93A4268125ED1E20C36E795D /* LayoutInspector in Frameworks */ = {isa = PBXBuildFile; productRef = 69B865B20AD2C7103E731CD3 /* LayoutInspector */; };
@@ -69,7 +71,9 @@
 		2C028735499EBCC2FBC10C7C /* BenchmarkApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BenchmarkApp.swift; sourceTree = "<group>"; };
 		2C8112008ABD14A80A786771 /* InspectorModifierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorModifierTests.swift; sourceTree = "<group>"; };
 		3431F07A9CB597F66FFE8C33 /* InspectorSnapshotTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = InspectorSnapshotTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		36C83E65CB5DC7A01275146C /* swiftui-layout-inspector-dev */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swiftui-layout-inspector-dev"; path = ..; sourceTree = SOURCE_ROOT; };
 		37A3F8BEF7F9D8F198545B3D /* DemoAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoAPI.swift; sourceTree = "<group>"; };
+		3F32EB82AE9C3B6026B7EC00 /* RerenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RerenderTests.swift; sourceTree = "<group>"; };
 		411AD2DE78E76C15E77681AC /* PlacementDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlacementDiagnostics.swift; sourceTree = "<group>"; };
 		420D69D809D37D5C97EEEAA2 /* Workloads.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Workloads.swift; sourceTree = "<group>"; };
 		46CB109B73C950E179D3D242 /* ScreenHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenHarness.swift; sourceTree = "<group>"; };
@@ -77,6 +81,7 @@
 		6A53963DB5E8D22189E1FF70 /* OverlayWindowPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayWindowPresenter.swift; sourceTree = "<group>"; };
 		6D00298E59D10603FB7A3D64 /* ProfileScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileScreen.swift; sourceTree = "<group>"; };
 		71A35C7959FB004C436F5E01 /* DebugDataEquivalenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugDataEquivalenceTests.swift; sourceTree = "<group>"; };
+		90DB3B34825C88B149ECE208 /* RerenderScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RerenderScreen.swift; sourceTree = "<group>"; };
 		95A354647A28F6FEB220A0D1 /* DemoScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoScreen.swift; sourceTree = "<group>"; };
 		964F5100413CB4824C8F2D69 /* GlassScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassScreen.swift; sourceTree = "<group>"; };
 		9F5CCA075CF7153BF8799FBA /* QueryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryTests.swift; sourceTree = "<group>"; };
@@ -86,7 +91,6 @@
 		C2D666D44AEF695CC57A480B /* HeavyModifierChains.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeavyModifierChains.swift; sourceTree = "<group>"; };
 		C447BB96B014B65F8A4E0BA2 /* DemoCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoCatalog.swift; sourceTree = "<group>"; };
 		C89B84AF92FF6D7852093555 /* RawDumpTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawDumpTests.swift; sourceTree = "<group>"; };
-		CF009FE2AB0B5452224D0A83 /* swiftui-layout-inspector-agent */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swiftui-layout-inspector-agent"; path = ..; sourceTree = SOURCE_ROOT; };
 		CFEE0344EC53558E6755D6B4 /* PlacementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlacementTests.swift; sourceTree = "<group>"; };
 		D2AB5776729EB9C37842F867 /* ComponentNameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComponentNameTests.swift; sourceTree = "<group>"; };
 		D4479B745CC5644C1AC7070D /* InspectorDemoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorDemoApp.swift; sourceTree = "<group>"; };
@@ -126,7 +130,7 @@
 		33EAD0B580D32D4E068823A7 /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				CF009FE2AB0B5452224D0A83 /* swiftui-layout-inspector-agent */,
+				36C83E65CB5DC7A01275146C /* swiftui-layout-inspector-dev */,
 			);
 			name = Packages;
 			sourceTree = "<group>";
@@ -157,6 +161,7 @@
 				CFEE0344EC53558E6755D6B4 /* PlacementTests.swift */,
 				9F5CCA075CF7153BF8799FBA /* QueryTests.swift */,
 				C89B84AF92FF6D7852093555 /* RawDumpTests.swift */,
+				3F32EB82AE9C3B6026B7EC00 /* RerenderTests.swift */,
 				46CB109B73C950E179D3D242 /* ScreenHarness.swift */,
 				10F77105A1ED4B0D116F35E4 /* ScreenSnapshotTests.swift */,
 			);
@@ -193,6 +198,7 @@
 				06AD2601BBE41E3ACE53F2A4 /* HeavyScreen.swift */,
 				6D00298E59D10603FB7A3D64 /* ProfileScreen.swift */,
 				AE86315FC1960613DFA134FB /* PromoScreen.swift */,
+				90DB3B34825C88B149ECE208 /* RerenderScreen.swift */,
 				1E532AAFB0F11F757B58F410 /* SpacesScreen.swift */,
 			);
 			path = Screens;
@@ -349,6 +355,7 @@
 				3124FE3872C31C20B8FE006C /* OverlayWindowPresenter.swift in Sources */,
 				7ABF6EDB8E678B1C86828E8F /* ProfileScreen.swift in Sources */,
 				AB948D3B346ED521D228FE35 /* PromoScreen.swift in Sources */,
+				32E8D2F7EC6222FC814B7A25 /* RerenderScreen.swift in Sources */,
 				5DACBA91264BA6BDA8554C69 /* SpacesScreen.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -371,6 +378,7 @@
 				5D757DB58D81B7F266EBE761 /* PlacementTests.swift in Sources */,
 				674FD3AC043F382481F50ABA /* QueryTests.swift in Sources */,
 				E67C9B9C3F09D22BF0162791 /* RawDumpTests.swift in Sources */,
+				83B070BFC55EEE7339263D9A /* RerenderTests.swift in Sources */,
 				331246D606F00CED407DC890 /* ScreenHarness.swift in Sources */,
 				B4E7CA87E0EC060532219DD7 /* ScreenSnapshotTests.swift in Sources */,
 			);

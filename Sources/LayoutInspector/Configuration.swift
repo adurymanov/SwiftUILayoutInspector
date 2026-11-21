@@ -95,6 +95,9 @@ extension LayoutInspector {
         case lint
         /// Distance between two tapped elements (or from one element to its container).
         case measure
+        /// How many times each component's `body` ran since the mode was turned on (or since Reset), as a heatmap.
+        /// Counts come from SwiftUI's AttributeGraph profiler, which runs only while this mode is on.
+        case rerenders
 
         public var id: String { rawValue }
 
@@ -107,6 +110,7 @@ extension LayoutInspector {
             case .uikit: "UIKit"
             case .lint: "Lint"
             case .measure: "Measure"
+            case .rerenders: "Re-renders"
             }
         }
 
@@ -120,6 +124,7 @@ extension LayoutInspector {
             case .uikit: "square.stack.3d.down.right"
             case .lint: "exclamationmark.triangle"
             case .measure: "arrow.up.and.down.and.arrow.left.and.right"
+            case .rerenders: "flame"
             }
         }
 
@@ -133,6 +138,15 @@ extension LayoutInspector {
             case .uikit: "Views and layers SwiftUI renders into"
             case .lint: "Design rule violations"
             case .measure: "Distance between two tapped elements"
+            case .rerenders: "How often each view's body runs, as a heatmap"
+            }
+        }
+
+        /// Development tools, listed in the menu's Dev section rather than with the layout modes.
+        public var isDevelopmentTool: Bool {
+            switch self {
+            case .uikit, .rerenders: true
+            default: false
             }
         }
     }

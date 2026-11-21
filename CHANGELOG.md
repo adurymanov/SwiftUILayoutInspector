@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.7
+
+- The menu has a Dev submenu for tools that help build views rather than check their layout. UIKit moved
+  there; the layout modes stay in the menu itself.
+- New mode, Dev → Re-renders (`Mode.rerenders`): a heatmap of how many times each app view's `body` ran since
+  the mode was turned on or since Dev → Reset counts. The counts are exact and per view, read from SwiftUI's
+  AttributeGraph profiler, which runs only while the mode is on. Share report adds `renders N` to every counted
+  view. On iOS 18 the mode shows that counts are not available.
+- `Mode.isDevelopmentTool` tells the Dev modes from the layout ones.
+- `capture.json` gets `renders` (`count`, `views`) for components while Re-renders is on, and `li` knows the
+  mode (`li rerenders`).
+- Breaking for exhaustive `switch`es over `LayoutInspector.Mode`: it has a new case. Images rendered with
+  `.rerenders` outside the inspector (`InspectorImageRenderer`, `snapshot`) have no counts to show.
+- The demo has a Re-renders screen with an `@Observable` model.
+
 ## 0.2.6
 
 - Commands from the Mac: an app that calls `bootstrap()` switches modes, refreshes and closes the inspector on

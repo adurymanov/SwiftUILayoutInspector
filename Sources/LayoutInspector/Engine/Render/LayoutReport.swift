@@ -7,12 +7,17 @@ public enum LayoutReport {
     public struct Options {
         public var includeFrames = true
         public var includeRenderTree = false
+        /// Body evaluations per component, from ``LayoutInspector/Mode/rerenders``.
+        var renderCounts: RenderCounts?
         public init() {}
     }
 
     public static func text(for capture: InspectorCapture, options: Options = Options()) -> String {
         var lines: [String] = []
         lines.append("# Layout report – \(capture.isSwiftUIGraphAvailable ? "SwiftUI graph" : "render tree only")")
+        if options.renderCounts != nil {
+            lines.append("# renders N: body runs since Re-renders was turned on or reset; Σn/k: n runs of k views of one type")
+        }
         for root in capture.swiftUIRoots {
             lines.append("")
             lines.append("## \(root.title)")
@@ -42,6 +47,7 @@ public enum LayoutReport {
             if !gaps.isEmpty { facts.append("gaps " + Set(gaps.map(\.pt)).sorted().joined(separator: "/")) }
         }
         if !node.info.decorations.isEmpty { facts.append(node.info.decorations.joined(separator: " ")) }
+        if let entry = options.renderCounts?.byNode[node.id] { facts.append("renders \(entry.label)") }
         if options.includeFrames, !node.frame.isNull {
             facts.append("@ \(node.frame.minX.pt),\(node.frame.minY.pt) \(node.frame.sizeLabel)")
         }

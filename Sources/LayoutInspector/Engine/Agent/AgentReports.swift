@@ -45,7 +45,8 @@ enum AgentReports {
         let start = CACurrentMediaTime()
         let bounds = session.overlay.space?.bounds ?? .infinite
         let report = session.reportText ?? ""
-        var json = CaptureJSON.object(for: capture, rules: session.configuration.lintRules, bounds: bounds, space: session.overlay.space)
+        var json = CaptureJSON.object(for: capture, rules: session.configuration.lintRules, bounds: bounds, space: session.overlay.space,
+                                     renderCounts: session.renderCounts)
         let mainMs = (CACurrentMediaTime() - start) * 1000
         let info: [String: Any] = [
             "number": captureCount,

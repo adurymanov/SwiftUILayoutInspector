@@ -3,7 +3,7 @@
 
 Simulator (the app runs a Debug build that calls LayoutInspector.bootstrap()):
   li <mode> [--device UDID] [--bundle ID] [--out DIR] [--timeout S] [--no-screenshot]
-        modes: components spacing fonts constraints uikit lint measure (`li mode measure` for the
+        modes: components spacing fonts constraints uikit lint measure rerenders (`li mode measure` for the
         Measure mode itself; `li measure A B` measures)
         Switches the inspector to <mode>, waits for a fresh capture and copies report.txt, capture.json,
         status.json and a screenshot into one folder. No taps. --ax auto|on|off: merge the simulator's
@@ -44,11 +44,11 @@ import tempfile
 import time
 import uuid
 
-LI_VERSION = "0.2.6"
+LI_VERSION = "0.2.7"
 SCHEMA_VERSION = 1
 PREFIX = "dev.layoutinspector."
-MODES = ["components", "spacing", "typography", "constraints", "uikit", "lint", "measure"]
-MODE_ALIASES = {"fonts": "typography", "font": "typography", "typo": "typography"}
+MODES = ["components", "spacing", "typography", "constraints", "uikit", "lint", "measure", "rerenders"]
+MODE_ALIASES = {"fonts": "typography", "font": "typography", "typo": "typography", "renders": "rerenders"}
 CONTENT_KINDS = {"text", "image", "control", "shape", "color", "divider", "platform"}
 REPORTS_ROOT = os.environ.get("LI_REPORTS_DIR") or os.path.expanduser("~/Library/Caches/LayoutInspector")
 
@@ -722,7 +722,7 @@ def node_summary(cap, n):
     f = frame(n)
     s = {"node": n["id"], "kind": n.get("kind"), "title": n.get("title"), "type": n.get("type"),
          "component": n.get("component"), "frame": f, "visible": n.get("visible")}
-    for key in ("text", "accessibility", "padding", "stack", "siblingGaps", "constraints", "image", "uikit"):
+    for key in ("text", "accessibility", "padding", "stack", "siblingGaps", "constraints", "image", "uikit", "renders"):
         if n.get(key) is not None:
             s[key] = n[key]
     if n.get("_element"):

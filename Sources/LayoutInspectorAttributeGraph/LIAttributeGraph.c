@@ -26,6 +26,24 @@ static NextChildFn nextChild;
 typedef const void *(*TypeDescriptionFn)(const void *);
 static TypeDescriptionFn typeDescription;
 
+// { element, node index } – returned in registers on arm64 and x86_64.
+typedef struct { const void *element; uint64_t index; } LINodeIterator;
+typedef LINodeIterator (*MakeNodeIteratorFn)(LIAGTreeElement);
+typedef uint32_t (*NextNodeFn)(LINodeIterator *);
+typedef const void *(*SubgraphGetGraphFn)(const void *);
+typedef void (*GraphFn)(const void *);
+typedef uint64_t (*GraphCounterFn)(const void *, uint32_t);
+typedef CFTypeRef (*GraphDescriptionFn)(const void *, CFDictionaryRef);
+
+static MakeNodeIteratorFn makeNodeIterator;
+static NextNodeFn nextNode;
+static SubgraphGetGraphFn subgraphGetGraph;
+static GraphFn startProfiling;
+static GraphFn stopProfiling;
+static GraphFn resetProfile;
+static GraphCounterFn graphCounter;
+static GraphDescriptionFn graphDescription;
+
 static void resolve(void) {
     static bool resolved = false;
     if (resolved) return;
@@ -38,6 +56,14 @@ static void resolve(void) {
     makeChildIterator = (MakeChildIteratorFn)dlsym(h, "AGTreeElementMakeChildIterator");
     nextChild = (NextChildFn)dlsym(h, "AGTreeElementGetNextChild");
     typeDescription = (TypeDescriptionFn)dlsym(h, "AGTypeDescription");
+    makeNodeIterator = (MakeNodeIteratorFn)dlsym(h, "AGTreeElementMakeNodeIterator");
+    nextNode = (NextNodeFn)dlsym(h, "AGTreeElementGetNextNode");
+    subgraphGetGraph = (SubgraphGetGraphFn)dlsym(h, "AGSubgraphGetGraph");
+    startProfiling = (GraphFn)dlsym(h, "AGGraphStartProfiling");
+    stopProfiling = (GraphFn)dlsym(h, "AGGraphStopProfiling");
+    resetProfile = (GraphFn)dlsym(h, "AGGraphResetProfile");
+    graphCounter = (GraphCounterFn)dlsym(h, "AGGraphGetCounter");
+    graphDescription = (GraphDescriptionFn)dlsym(h, "AGGraphDescription");
 }
 
 bool LIAGIsAvailable(void) {
@@ -75,6 +101,43 @@ int LIAGTreeElementGetChildren(LIAGTreeElement element, LIAGTreeElement *out, in
     LIAGTreeElement child;
     while (n < max && (child = nextChild(&it)) != NULL) {
         out[n++] = child;
+    }
+    return n;
+}
+
+// MARK: - Profiling
+
+bool LIAGProfilingIsAvailable(void) {
+    resolve();
+    return LIAGIsAvailable() && makeNodeIterator && nextNode && subgraphGetGraph && startProfiling && stopProfiling
+        && resetProfile && graphCounter && graphDescription;
+}
+
+const void *LIAGSubgraphGetGraph(const void *subgraph) {
+    return LIAGProfilingIsAvailable() ? subgraphGetGraph(subgraph) : NULL;
+}
+
+void LIAGGraphStartProfiling(const void *graph) { if (LIAGProfilingIsAvailable()) startProfiling(graph); }
+void LIAGGraphStopProfiling(const void *graph) { if (LIAGProfilingIsAvailable()) stopProfiling(graph); }
+void LIAGGraphResetProfile(const void *graph) { if (LIAGProfilingIsAvailable()) resetProfile(graph); }
+
+uint64_t LIAGGraphGetCounter(const void *graph, uint32_t counter) {
+    return LIAGProfilingIsAvailable() ? graphCounter(graph, counter) : 0;
+}
+
+CFTypeRef LIAGGraphDescription(const void *graph, CFDictionaryRef options) {
+    return LIAGProfilingIsAvailable() ? graphDescription(graph, options) : NULL;
+}
+
+int LIAGTreeElementGetNodes(LIAGTreeElement element, uint32_t *out, int max) {
+    if (!LIAGProfilingIsAvailable()) return 0;
+    LINodeIterator it = makeNodeIterator(element);
+    int n = 0;
+    while (n < max) {
+        uint32_t node = nextNode(&it);
+        // AGAttributeNil is 2; 0 is never a node either.
+        if (node == 2 || node == 0) break;
+        out[n++] = node;
     }
     return n;
 }

@@ -8,10 +8,14 @@ enum CaptureJSON {
     static let schemaVersion = 1
 
     /// `space` – the view the node frames were last resolved in (window points for the inspector on screen).
-    static func object(for capture: InspectorCapture, rules: LayoutInspector.LintRules, bounds: CGRect, space: UIView?) -> [String: Any] {
+    /// `renderCounts` – body runs while Re-renders is on (`renders` of a component).
+    static func object(for capture: InspectorCapture, rules: LayoutInspector.LintRules, bounds: CGRect, space: UIView?,
+                       renderCounts: RenderCounts? = nil) -> [String: Any] {
         var nodes: [[String: Any]] = []
         func visit(_ node: InspectorNode, tree: String, component: String?) {
-            nodes.append(describe(node, tree: tree, component: component))
+            var o = describe(node, tree: tree, component: component)
+            if let entry = renderCounts?.byNode[node.id] { o["renders"] = ["count": entry.count, "views": entry.instances] }
+            nodes.append(o)
             let inner = node.kind == .component ? node.title : component
             for child in node.children { visit(child, tree: tree, component: inner) }
         }

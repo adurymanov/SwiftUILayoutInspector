@@ -215,14 +215,13 @@ struct InspectorToolbar: View {
 
     @ViewBuilder private var menu: some View {
         Section(status) {
-            Picker("Mode", selection: highlightedMode) {
-                Label("Off", systemImage: "eye.slash").tag(LayoutInspector.Mode?.none)
-                ForEach(LayoutInspector.Mode.allCases) { mode in
-                    Label(mode.title, systemImage: mode.systemImage).tag(Optional(mode))
-                }
+            // Toggles, not a Picker: the Dev submenu sets the same mode, and a Picker without a tag for it would
+            // hold an invalid selection.
+            modeToggle(nil, title: "Off", systemImage: "eye.slash")
+            ForEach(LayoutInspector.Mode.allCases.filter { !$0.isDevelopmentTool }) { mode in
+                modeToggle(mode, title: mode.title, systemImage: mode.systemImage)
             }
-            .pickerStyle(.inline)
-            .labelsHidden()
+            devMenu
         }
         ControlGroup {
             Button { session.beginCapture() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
@@ -242,6 +241,42 @@ struct InspectorToolbar: View {
         }
     }
 
+    /// Tools for developing views rather than checking their layout.
+    private var devMenu: some View {
+        Menu {
+            ForEach(LayoutInspector.Mode.allCases.filter(\.isDevelopmentTool)) { mode in
+                if mode == .rerenders && !RenderProfiler.isAvailable {
+                    Button {} label: { Label("\(mode.title) – not available on this iOS", systemImage: mode.systemImage) }
+                        .disabled(true)
+                } else {
+                    modeToggle(mode, title: mode.title, systemImage: mode.systemImage)
+                }
+            }
+            if session.isHighlighting && mode == .rerenders && session.renderCounts?.isGraphFound == true {
+                Button { session.resetRenderCounts() } label: {
+                    Label("Reset counts", systemImage: "arrow.counterclockwise")
+                }
+            }
+        } label: {
+            if session.isHighlighting && mode.isDevelopmentTool {
+                Label("Dev · \(mode.title)", systemImage: "hammer")
+            } else {
+                Label("Dev", systemImage: "hammer")
+            }
+        }
+    }
+
+    /// Checked while the screen is highlighted in `mode` (`nil` – Off). Picking a mode highlights the screen in it.
+    private func modeToggle(_ mode: LayoutInspector.Mode?, title: String, systemImage: String) -> some View {
+        Toggle(isOn: Binding {
+            highlightedMode.wrappedValue == mode
+        } set: { isOn in
+            if isOn || mode == nil { highlightedMode.wrappedValue = mode }
+        }) {
+            Label(title, systemImage: systemImage)
+        }
+    }
+
     /// `nil` – not highlighting. Picking a mode highlights the screen in it.
     private var highlightedMode: Binding<LayoutInspector.Mode?> {
         Binding {
@@ -256,6 +291,10 @@ struct InspectorToolbar: View {
         if let progress = session.captureProgress { return "Capturing… \(Int(progress * 100))%" }
         guard session.isHighlighting else { return "Pick a mode to highlight the screen" }
         guard let capture = session.capture else { return "Waiting for the screen to settle" }
+        if mode == .rerenders, let hottest = session.renderCounts?.hottest, hottest.entry.count > 0,
+           let node = capture.node(withID: hottest.id) {
+            return "Hottest: \(node.title) \(hottest.entry.label)"
+        }
         let source = capture.isSwiftUIGraphAvailable ? "\(capture.swiftUINodes.count) nodes" : "Render tree only"
         return "\(source) · \(Int(capture.duration * 1000)) ms"
     }

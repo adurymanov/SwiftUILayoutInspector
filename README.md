@@ -35,7 +35,7 @@ and the data comes from the SwiftUI runtime — the same debug graph Xcode's vie
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.6"),
+.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.7"),
 
 .target(name: "App", dependencies: [
     .product(name: "LayoutInspector", package: "SwiftUILayoutInspector"),
@@ -161,11 +161,37 @@ Repeated issues (rows of a `ForEach`) are merged into one line with a counter.
 | `.uikit` | the render tree: views and layers SwiftUI draws into, UIKit fonts and constraints |
 | `.lint` | numbered design-rule violations and their list |
 | `.measure` | distance between two tapped elements, or from one element to its container |
+| `.rerenders` | how many times each app view's `body` ran since the mode was turned on or reset, as a heatmap from blue (rare) to red (often) |
 
 The controls are a round glass button (a material before iOS 26) that can be dragged anywhere; it remembers
-its place. A tap opens the menu: the modes, Refresh, Share report (a text layout report), Labels, Grid and
-Close. With `highlightsOnAppear: false` a screen is not captured until a mode is picked there, so nothing is
+its place. A tap opens the menu: the layout modes, a Dev submenu, Refresh, Share report (a text layout
+report), Labels, Grid and Close. Dev holds the tools for working on views rather than checking their layout:
+UIKit and Re-renders. With `highlightsOnAppear: false` a screen is not captured until a mode is picked there, so nothing is
 computed while navigating; the button shows the capture's progress.
+
+### Re-renders
+
+Dev → Re-renders counts how many times the `body` of each app view ran, from the moment the mode was turned on
+or since Dev → Reset counts. Every component is tinted from blue (few runs) to red (many) and labelled with its
+count; the counts update once a second on the geometry of the last capture. Change one property of an
+`@Observable` model and only the views that read it heat up. Share report adds `renders N` to every counted view.
+
+The counts are exact. They come from SwiftUI's AttributeGraph, which records how often each of its nodes was
+updated while profiling is on, and a view's `body` is one of those nodes. Profiling runs only while the mode is
+on: switching to another mode, turning the overlay off or closing the inspector stops it, and with the mode off
+the inspector doesn't touch the profiler at all. Measured on the demo's Heavy home screen (iPhone 17 Pro
+simulator, iOS 27, 7 rounds of 20 forced updates): profiling on and off differ by less than the spread between
+rounds (medians 251 against 275 ms in one run, 306 against 307 ms in another). Reading the counts describes the
+app's whole AttributeGraph and takes 18–60 ms on the demo, more in a larger app; the first read after the mode is
+turned on takes about 0.15 s. Counts are read once a second, less often when a read is slow, so reading never
+takes more than 5 % of the time.
+
+Profiling is switched for the whole process: turning the mode on resets, and turning it off stops, a profile
+that Instruments' SwiftUI template may be recording at the same time.
+
+When views of one type can't be told apart (the capture shows a different number of them than the graph holds),
+they share their total, labelled `Σ12/3`: twelve runs of three views. On iOS 18 the inspector can't reach the
+view graph, so the mode shows a note instead of counts.
 
 ## Turning it off
 
@@ -177,7 +203,7 @@ computed while navigating; the button shows the capture's progress.
   API:
 
   ```swift
-  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.6", traits: []),
+  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.7", traits: []),
   ```
 
   Package traits apply to every build configuration. To keep the inspector in Debug and drop it from Release,
@@ -383,9 +409,10 @@ remains.
 
 ## Example
 
-`Example/` contains a demo app with eight screens (custom components and `Layout`, lazy stacks with
+`Example/` contains a demo app with nine screens (custom components and `Layout`, lazy stacks with
 skeletons, a `Form`, a grid with lint issues, `UIViewRepresentable` with Auto Layout, Liquid Glass, coordinate
-spaces of `geometryGroup` and transform effects, a heavy home screen for timing) and the test suite:
+spaces of `geometryGroup` and transform effects, a heavy home screen for timing, an `@Observable` model for
+Re-renders) and the test suite:
 snapshot tests of every screen in every mode, query tests and tests of the modifier.
 
 ```bash
@@ -396,8 +423,8 @@ open LayoutInspectorExample.xcodeproj
 # open a screen right away:
 xcrun simctl launch booted dev.layoutinspector.example \
   -screen profile -inspector spacing -presentation sheet -toolbar hidden
-#   -screen        profile | feed | checkout | dashboard | promo
-#   -inspector     components | spacing | typography | constraints | uikit | lint | measure
+#   -screen        profile | feed | checkout | dashboard | promo | glass | spaces | heavy | rerenders
+#   -inspector     components | spacing | typography | constraints | uikit | lint | measure | rerenders
 #   -presentation  push | sheet | fullScreen | window (a window of its own at .alert + 99)
 #   -toolbar       visible | hidden
 #   -highlight tap           capture only after a mode is picked in the menu
