@@ -347,6 +347,7 @@ final class SwiftUITreeBuilder {
             anchor: NodeAnchor(view: ctx.space, rect: ctx.rect),
             info: info
         )
+        if kind == .component { node.recordedFrame = raw.firstGeometry }
         ctx.parent?.add(node)
         return node
     }

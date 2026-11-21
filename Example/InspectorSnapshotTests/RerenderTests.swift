@@ -119,12 +119,10 @@ final class RerenderTests: XCTestCase {
 
         for _ in 0..<3 { model.lines[2].amount += 1; harness.window.layoutIfNeeded() }
         let counts = heatmap.read()
-        // Labels of a row are told apart by their text. The identical "Card payment" labels, and the header with its
-        // hidden copy, may share a count.
-        let unique = labels.filter { label in ComponentGraph.texts(in: label).contains { $0.hasPrefix("Payment") || $0.hasPrefix("$") } }
-        XCTAssertGreaterThan(unique.count, 20)
-        let shared = unique.filter { counts.byNode[$0.id]?.instances != 1 }
-        XCTAssertEqual(shared.map { ComponentGraph.texts(in: $0).first ?? "" }, [], "labels with their own text sharing a count")
+        // Every label on screen is told apart, the identical "Card payment" ones and the formatted amounts included.
+        // Only the header and its hidden copy, drawn in the same place, share one count.
+        let shared = labels.filter { counts.byNode[$0.id]?.instances != 1 }
+        XCTAssertEqual(Set(shared.map { ComponentGraph.texts(in: $0).first ?? "" }), Set(shared.isEmpty ? [] : ["Ledger"]), "labels sharing a count")
         let changed = labels.filter { counts.byNode[$0.id]?.count == 3 }
         XCTAssertEqual(changed.count, 1)
         let rows = capture.swiftUINodes.filter { $0.title == "LedgerRow" && $0.isVisible }.sorted { $0.frame.minY < $1.frame.minY }

@@ -17,7 +17,8 @@ final class ComponentListTests: XCTestCase {
         let harness = ScreenHarness(view)
         let capture = try await harness.waitUntilLoaded(timeout: .seconds(20))
         capture.resolveFrames(in: harness.window)
-        if capture.nodes(.component).isEmpty {
+        // iOS 18 names only a few views (a controller host), never the app's own screens.
+        if !capture.nodes(.component).contains(where: { ["AccountStatementsHistoryScreenContent", "WalletBalance", "HeavyScreen"].contains($0.title) || $0.title.hasPrefix("Heavy") }) {
             harness.tearDown()
             throw XCTSkip("no component names on this iOS version (iOS 18)")
         }
@@ -99,6 +100,88 @@ final class ComponentListTests: XCTestCase {
         let statefulTitles = Set(titles(withState, .init(stateful: stateful)))
         XCTAssertTrue(statefulTitles.contains("ScreenErrorStateOverlayContainer"), "\(statefulTitles)")
         XCTAssertFalse(statefulTitles.contains("TransactionHistoryRowWithMerchantLogoAndAmount"))
+    }
+
+    /// Controller hosts the size of their parent with nothing to show fold into the row, like wrappers.
+    func test_hollowPresenters_areWrappers() async throws {
+        let (harness, capture) = try await capture(DeepChainScreen())
+        defer { harness.tearDown() }
+        let list = list(capture)
+        let hosts = list.all.filter { $0.node.title == "ModalControllerHost" }
+        try XCTSkipIf(hosts.isEmpty, "the controller hosts are not named on this iOS version")
+        let rows = list.rows(ComponentList.Filter(), .init(bounds: harness.window.bounds))
+        XCTAssertFalse(rows.contains { $0.node.title == "ModalControllerHost" }, list.text(rows, in: list.folded, counts: nil))
+        XCTAssertTrue(list.folded.contains { row in row.wrappers.contains { $0.title == "ModalControllerHost" } })
+        XCTAssertEqual(rows.first?.node.title, "AccountStatementsHistoryScreenContent", list.text(rows, in: list.folded, counts: nil))
+    }
+
+    /// Siblings of one type next to each other become one row that opens with a tap.
+    func test_runOfSiblings_isOneRow() async throws {
+        let (harness, capture) = try await capture(DeepChainScreen())
+        defer { harness.tearDown() }
+        let list = list(capture)
+        let filter = ComponentList.Filter()
+        let context = ComponentList.Context(bounds: harness.window.bounds)
+        let rows = list.rows(filter, context)
+        let entries = list.entries(rows, filter: filter, context: context, expanded: [])
+        let groups = entries.compactMap { entry -> (String, [ComponentList.Item])? in
+            if case let .group(key, items) = entry { return (key, items) } else { return nil }
+        }
+        let group = try XCTUnwrap(groups.first { $0.1.first?.node.title == "TransactionHistoryRowWithMerchantLogoAndAmount" })
+        let describe = entries.map { entry -> String in
+            switch entry {
+            case let .item(item): "\(item.node.title) p\(item.parent ?? -1) \(item.frame.frameLabel)"
+            case let .group(key, items): "GROUP \(key) ×\(items.count)"
+            case let .close(key, items): "OPEN \(key) ×\(items.count)"
+            }
+        }.joined(separator: "\n")
+        // Rows behind the bottom bar come after it in reading order: a run of two stays as two rows.
+        let single = entries.filter { if case let .item(item) = $0 { item.node.title == "TransactionHistoryRowWithMerchantLogoAndAmount" } else { false } }
+        XCTAssertLessThanOrEqual(single.count, 2, describe)
+        XCTAssertGreaterThanOrEqual(group.1.count, 8, describe)
+        let opened = list.entries(rows, filter: filter, context: context, expanded: [group.0])
+        XCTAssertEqual(opened.count, entries.count + group.1.count, "the opened run and a row that folds it again")
+        var search = context
+        search.query = "Transaction"
+        XCTAssertTrue(list.entries(rows, filter: filter, context: search, expanded: []).allSatisfy { if case .item = $0 { true } else { false } })
+    }
+
+    /// The Module menu lists the screen's modules, keeps the rows of the one picked, and forgets a module the next
+    /// screen doesn't have.
+    func test_moduleFilter() async throws {
+        let (harness, capture) = try await capture(DeepChainScreen())
+        defer { harness.tearDown() }
+        let model = ComponentListModel()
+        model.filter = ComponentList.Filter(visibleOnly: false, hidesWrappers: false, appTypesOnly: false)
+        model.update(capture)
+        XCTAssertTrue(model.list.modules.contains("InspectorDemo"), "\(model.list.modules)")
+        XCTAssertEqual(model.list.modules.first, "InspectorDemo", "the app's modules come first")
+        let all = model.list.rows(model.filter, model.context(bounds: harness.window.bounds, counts: nil)).count
+        model.filter.module = "InspectorDemo"
+        XCTAssertEqual(model.list.rows(model.filter, model.context(bounds: harness.window.bounds, counts: nil)).count, all)
+
+        let other = ScreenHarness(RerenderScreen())
+        defer { other.tearDown() }
+        let otherCapture = try await other.waitUntilLoaded()
+        model.filter.module = "SomeModuleThatIsNotThere"
+        model.update(otherCapture)
+        XCTAssertNil(model.filter.module, "a module the screen doesn't have is dropped, or the list would be empty")
+        model.filter = ComponentList.Filter()
+    }
+
+    /// The panel and the button stay above the app's own bar at the bottom.
+    func test_panel_staysAboveBottomBar() async throws {
+        let harness = ScreenHarness(DeepChainScreen().layoutInspector(.lint))
+        defer { harness.tearDown() }
+        try await waitUntil { LayoutInspector.activeCapture != nil && InspectorPresenter.shared.frontmost?.panel != nil }
+        let session = try XCTUnwrap(InspectorPresenter.shared.frontmost)
+        let barTop = try XCTUnwrap(session.bottomBarTop, "the bar of buttons at the bottom was not found")
+        let root = try XCTUnwrap(session.window?.root)
+        root.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(300))
+        root.view.layoutIfNeeded()
+        let panel = try XCTUnwrap(root.view.subviews.first { NSStringFromClass(type(of: $0)).contains("Hosting") && $0.frame.height > 20 && $0.frame.minX < 20 })
+        XCTAssertLessThanOrEqual(panel.frame.maxY, barTop, "panel \(panel.frame) covers the bar at \(barTop)")
     }
 
     /// A point picked on screen keeps the components under it, smallest first.

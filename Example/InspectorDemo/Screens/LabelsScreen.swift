@@ -5,15 +5,42 @@ import SwiftUI
 /// screen still exist, inside other components and in a hidden copy. Re-renders tells each one apart.
 struct BrandLabel: View {
     enum Style { case title, body, amount }
-    let text: String
+    /// Like a design system's text: plain, attributed or a localization key, picked in the body.
+    enum Content { case plain(String), attributed(AttributedString), key(LocalizedStringKey) }
+    let content: Content
     var style: Style = .body
+    @Environment(\.redactionReasons) private var redaction
+
+    init(text: String, style: Style = .body) {
+        content = .plain(text)
+        self.style = style
+    }
+
+    init(_ content: Content, style: Style = .body) {
+        self.content = content
+        self.style = style
+    }
 
     var body: some View {
         HStack(spacing: 0) {
-            Text(text)
-                .font(style == .title ? .headline : style == .amount ? .subheadline.monospacedDigit() : .subheadline)
-                .foregroundStyle(style == .body ? .secondary : .primary)
+            if redaction.contains(.privacy) {
+                text.privacySensitive()
+            } else {
+                text.allowsHitTesting(false)
+            }
         }
+    }
+
+    private var text: some View {
+        Group {
+            switch content {
+            case let .plain(string): Text(string)
+            case let .attributed(string): Text(string)
+            case let .key(key): Text(key)
+            }
+        }
+        .font(style == .title ? .headline : style == .amount ? .subheadline.monospacedDigit() : .subheadline)
+        .foregroundStyle(style == .body ? .secondary : .primary)
     }
 }
 
@@ -30,7 +57,7 @@ struct BrandLabel: View {
 /// Reads only its own line's amount.
 struct LedgerAmount: View {
     let line: LedgerLine
-    var body: some View { BrandLabel(text: "$\(line.amount)", style: .amount) }
+    var body: some View { BrandLabel(.attributed(AttributedString(line.amount.formatted(.currency(code: "USD")))), style: .amount) }
 }
 
 struct LedgerRow: View {
@@ -40,7 +67,7 @@ struct LedgerRow: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 BrandLabel(text: line.title, style: .title)
-                BrandLabel(text: "Card payment")
+                BrandLabel(.attributed(AttributedString("Card payment")))
             }
             Spacer()
             LedgerAmount(line: line)

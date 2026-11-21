@@ -77,6 +77,37 @@ final class InspectorSession: ObservableObject {
     }
     /// The info card of the mode (lint list, measure hint, re-render summary), shown as a panel above the overlay.
     @Published private(set) var panel: InspectorCard.Content?
+    /// Top of the app's bar at the bottom of the screen (a tab bar, a toolbar) in overlay coordinates: the inspector's
+    /// panel and button stay above it. `nil` when the screen has none.
+    @Published private(set) var bottomBarTop: CGFloat?
+
+    /// Controls and bars in the bottom 140 points: a system `UITabBar` or `UIToolbar`, or the buttons of a bar drawn in
+    /// SwiftUI.
+    static func bottomBarTop(in capture: InspectorCapture, bounds: CGRect) -> CGFloat? {
+        let band = bounds.maxY - 140
+        var top: CGFloat?
+        func consider(_ frame: CGRect) {
+            guard !frame.isNull, frame.minY >= band - 60, frame.maxY > band, frame.height < 140, frame.width > 20 else { return }
+            top = min(top ?? frame.minY, frame.minY)
+        }
+        // Buttons that scroll with the content are not a bar. Nor is one row of text: a bar has three or more items side
+        // by side (iOS 18 doesn't name buttons, but their labels are there).
+        let fixed = capture.swiftUINodes.filter { node in
+            node.isVisible && [.control, .text, .image].contains(node.kind) && node.frame.maxY > band
+                && !node.path.contains(where: { $0.kind == .scroll || $0.kind == .list })
+        }
+        for node in fixed where node.kind == .control { consider(node.frame) }
+        let labels = fixed.filter { $0.kind != .control }
+        for label in labels where labels.filter({ abs($0.frame.midY - label.frame.midY) < 8 }).count >= 3 {
+            consider(label.frame.insetBy(dx: 0, dy: -6))
+        }
+        capture.uikitRoot.forEach { node in
+            guard let name = node.info.uikit?.className, node.isVisible,
+                  name.contains("TabBar") || name.contains("Toolbar") else { return }
+            consider(node.frame)
+        }
+        return top
+    }
 
     /// Called when the configuration is changed from the toolbar (not from `apply(_:)`).
     var onConfigurationChange: ((LayoutInspector.Configuration) -> Void)?
@@ -378,6 +409,8 @@ final class InspectorSession: ObservableObject {
             NSLog("%@", "LayoutInspector capture: " + LayoutCapture.lastTimings.joined(separator: ", "))
         }
         CaptureDump.writeIfRequested(capture)
+        let barTop = Self.bottomBarTop(in: capture, bounds: space.bounds)
+        if barTop != bottomBarTop { bottomBarTop = barTop }
         layoutSignature = signature
         scrollSignature = LayoutCapture.scrollSignature(of: target)
         lastCaptureTime = CACurrentMediaTime()

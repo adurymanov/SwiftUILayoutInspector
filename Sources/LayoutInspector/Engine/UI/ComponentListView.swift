@@ -13,6 +13,8 @@ final class ComponentListModel: ObservableObject {
     @Published var query = ""
     @Published var point: CGPoint?
     @Published var isPicking = false
+    /// Groups of siblings opened with a tap.
+    @Published var expanded = Set<String>()
     /// Opened details.
     var pages: [DetailPage: DetailSnapshot] = [:]
 
@@ -90,15 +92,28 @@ struct ComponentListView: View {
         NavigationStack(path: $path) {
             let counts = session.renderCounts
             let items = model.list.items(folded: model.filter.hidesWrappers)
-            let rows = model.list.rows(model.filter, model.context(bounds: session.overlay.bounds, counts: counts))
+            let context = model.context(bounds: session.overlay.bounds, counts: counts)
+            let rows = model.list.rows(model.filter, context)
             List {
                 Section {
-                    ForEach(rows) { item in
-                        ComponentRowView(item: item, parent: item.parent.map { items[$0].node.title },
-                                         renders: counts?.byNode[item.node.id],
-                                         isSelected: session.selectedID == item.node.id,
-                                         select: { session.select(item.target); reveal() },
-                                         info: { open(item, in: items) })
+                    ForEach(model.list.entries(rows, filter: model.filter, context: context, expanded: model.expanded,
+                                               selected: session.selectedID)) { entry in
+                        switch entry {
+                        case let .item(item):
+                            ComponentRowView(item: item, parent: item.parent.map { items[$0].node.title },
+                                             renders: counts?.byNode[item.node.id],
+                                             isSelected: session.selectedID == item.node.id,
+                                             select: { session.select(item.target); reveal() },
+                                             info: { open(item, in: items) })
+                        case let .group(key, group):
+                            GroupRowView(items: group, parent: group[0].parent.map { items[$0].node.title }, isOpen: false) {
+                                model.expanded.insert(key)
+                            }
+                        case let .close(key, group):
+                            GroupRowView(items: group, parent: group[0].parent.map { items[$0].node.title }, isOpen: true) {
+                                model.expanded.remove(key)
+                            }
+                        }
                     }
                 } header: {
                     FilterBar(model: model, modules: model.list.modules, hasCounts: counts != nil, rowCount: rows.count,
@@ -338,6 +353,36 @@ private struct ComponentRowView: View {
 
     private var caption: String {
         item.frame.frameLabel + (parent.map { " · in \($0)" } ?? "")
+    }
+}
+
+private struct GroupRowView: View {
+    let items: [ComponentList.Item]
+    let parent: String?
+    let isOpen: Bool
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(items[0].node.title) ×\(items.count)")
+                        .font(.subheadline)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text("views of one type next to each other" + (parent.map { " · in \($0)" } ?? ""))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: isOpen ? "chevron.up" : "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 12))
+        .accessibilityHint(isOpen ? "Folds them into one row" : "Shows each of them")
     }
 }
 

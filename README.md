@@ -35,7 +35,7 @@ and the data comes from the SwiftUI runtime — the same debug graph Xcode's vie
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.10"),
+.package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.11"),
 
 .target(name: "App", dependencies: [
     .product(name: "LayoutInspector", package: "SwiftUILayoutInspector"),
@@ -190,19 +190,22 @@ takes more than 5 % of the time.
 Profiling is switched for the whole process: turning the mode on resets, and turning it off stops, a profile
 that Instruments' SwiftUI template may be recording at the same time.
 
-Each view is found in the graph by the texts it was built with, so one text component used two hundred times, in
-a lazy list with rows off screen, gets a count per label. Views that still can't be told apart get a
+Each view is found in the graph through the first view its `body` produced, whose recorded box the capture keeps
+too, so one text component used two hundred times, in a lazy list with rows off screen, gets a count per label. Views that still can't be told apart get a
 faint outline and no label; the panel and the components list show their total once (`Σ12 across 3 views`). On
 iOS 18 the inspector can't reach the view graph, so the mode shows a note instead of counts.
 
-The summary sits in a glass panel at the bottom (Lint's issue list and Measure's hint too). A tap folds it into a
+The summary sits in a glass panel at the bottom, above the app's tab bar or toolbar (Lint's issue list and
+Measure's hint too). A tap folds it into a
 small pill so it doesn't cover the screen; it stays folded until it is opened again.
 
 ### Components list
 
 Dev → Components list opens a sheet with the app's views on the current screen, one compact row each: the name,
 and below it the frame and the view it is in. Chains of views and modifiers of one size around a screen fold into
-one row, the innermost view that isn't a modifier, marked `+12 wrappers`. A tap on a row outlines the view on
+one row, the innermost view that isn't a modifier, marked `+12 wrappers`; so do presenters and controller hosts with
+nothing of their own to show. Three or more siblings of one type in a row become one row (`Row ×14`) that opens
+with a tap. A tap on a row outlines the view on
 screen and lowers the sheet; Share sends the rows as text.
 
 Filters under the search field, kept between launches:
@@ -247,7 +250,7 @@ top-level `environment`, and the same `properties` per component when the app ru
   API:
 
   ```swift
-  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.10", traits: []),
+  .package(url: "https://github.com/adurymanov/SwiftUILayoutInspector.git", from: "0.2.11", traits: []),
   ```
 
   Package traits apply to every build configuration. To keep the inspector in Debug and drop it from Release,

@@ -45,7 +45,7 @@ import tempfile
 import time
 import uuid
 
-LI_VERSION = "0.2.10"
+LI_VERSION = "0.2.11"
 SCHEMA_VERSION = 1
 PREFIX = "dev.layoutinspector."
 MODES = ["components", "spacing", "typography", "constraints", "uikit", "lint", "measure", "rerenders"]

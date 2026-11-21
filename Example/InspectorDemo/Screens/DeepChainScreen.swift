@@ -33,6 +33,12 @@ struct DeepChainScreen: View {
         .modifier(NavigationBarAppearanceConfiguringModifier())
         .modifier(ScrollPositionRestorationModifier())
         .modifier(ToastPresentationHostingModifier())
+        .modifier(ModalPresentationModifier())
+        .modifier(ModalPresentationModifier())
+        .modifier(ModalPresentationModifier())
+        .modifier(ModalPresentationModifier())
+        .modifier(ModalPresentationModifier())
+        .safeAreaInset(edge: .bottom, spacing: 0) { BottomTabBar() }
         .navigationTitle("Deep chain")
     }
 }
@@ -129,6 +135,32 @@ struct ScrollPositionRestorationModifier: ViewModifier {
 
 struct ToastPresentationHostingModifier: ViewModifier {
     func body(content: Content) -> some View { content.overlay(alignment: .top) { EmptyView() } }
+}
+
+// MARK: - Presenters: a controller host the size of the screen, nothing of its own to show
+
+struct ModalPresentationModifier: ViewModifier {
+    func body(content: Content) -> some View { content.background { ModalControllerHost() } }
+}
+
+struct ModalControllerHost: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> UIViewController { UIViewController() }
+    func updateUIViewController(_ controller: UIViewController, context: Context) {}
+}
+
+/// A bar of buttons at the bottom, like an app's own tab bar.
+struct BottomTabBar: View {
+    var body: some View {
+        HStack {
+            ForEach(["Home", "Pay", "Invest", "Invite"], id: \.self) { title in
+                Button(title) {}
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.bar)
+    }
 }
 
 // MARK: - Content

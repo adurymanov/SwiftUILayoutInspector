@@ -44,6 +44,7 @@ final class InspectorRootViewController: UIViewController {
     private var pill: UIHostingController<InspectorToolbar>!
     private var pillX: NSLayoutConstraint!
     private var pillY: NSLayoutConstraint!
+    private var panelBottom: NSLayoutConstraint!
     private var placedInBounds: CGSize?
     private var dragOrigin: CGPoint?
     private var subscriptions: Set<AnyCancellable> = []
@@ -68,11 +69,20 @@ final class InspectorRootViewController: UIViewController {
 
         let panel = UIHostingController(rootView: InspectorPanel(session: session))
         embed(panel)
+        panelBottom = panel.view.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8)
         NSLayoutConstraint.activate([
             panel.view.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
             panel.view.trailingAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -68),
-            panel.view.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8),
+            panelBottom,
         ])
+        session.$bottomBarTop.removeDuplicates()
+            .sink { [weak self] _ in
+                guard let self else { return }
+                view.setNeedsLayout()
+                // A button nobody has moved yet goes to its default place above the bar.
+                if ToolbarPosition.center(in: view.bounds) == nil, dragOrigin == nil { placedInBounds = nil }
+            }
+            .store(in: &subscriptions)
 
         pill = UIHostingController(rootView: InspectorToolbar(session: session))
         embed(pill)
@@ -100,6 +110,9 @@ final class InspectorRootViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        // Above the app's bottom bar, so the panel never covers its buttons.
+        let barInset = session.bottomBarTop.map { max(0, view.keyboardLayoutGuide.layoutFrame.minY - $0) } ?? 0
+        if panelBottom.constant != -8 - barInset { panelBottom.constant = -8 - barInset }
         if dragOrigin == nil {
             if placedInBounds != view.bounds.size {
                 placedInBounds = view.bounds.size
@@ -118,7 +131,9 @@ final class InspectorRootViewController: UIViewController {
     }
 
     private var defaultPillCenter: CGPoint {
-        CGPoint(x: pillArea.maxX, y: pillArea.maxY)
+        let size = pill.view.intrinsicContentSize
+        let bottom = min(pillArea.maxY, (session.bottomBarTop ?? .infinity) - 8)
+        return CGPoint(x: pillArea.maxX, y: bottom - size.height / 2)
     }
 
     private func movePill(to center: CGPoint) {

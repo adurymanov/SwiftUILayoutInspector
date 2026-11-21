@@ -230,6 +230,9 @@ public final class InspectorNode: Identifiable {
     public internal(set) weak var parent: InspectorNode?
     /// Frame in the overlay coordinate space. Updated by `InspectorCapture.resolveFrames(in:)`.
     public internal(set) var frame: CGRect = .null
+    /// Components: the box SwiftUI recorded for the first view inside, as it recorded it. AttributeGraph holds the same
+    /// numbers for the view, which ties the node to the view's graph nodes.
+    var recordedFrame: CGRect?
 
     init(id: Int, kind: NodeKind, title: String, detail: String? = nil, typeName: String, anchor: NodeAnchor, info: NodeInfo = NodeInfo()) {
         self.id = id

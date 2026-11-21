@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.11
+
+- Re-renders ties each view to the box SwiftUI recorded for the first view its `body` produced: the element of a
+  produced view resolves, through AttributeGraph's indirect attributes, to the `body` node that built it. Views
+  built from the same texts, formatted or attributed texts, and views without any text (images, icons, overlays)
+  now get counts of their own; texts are only a fallback.
+- `capture.json` has a top-level `renders` summary while Re-renders is on: `views`, `own`, `shared`.
+- The panel (Re-renders, Lint, Measure) and the button's default spot stay above the app's bar at the bottom (a
+  `UITabBar`, a `UIToolbar`, or a row of SwiftUI buttons there), so their taps reach the bar.
+- Components list: presenters and controller hosts the size of their parent with nothing of their own to show
+  fold into the row as wrappers. Three or more siblings of one type next to each other become one row
+  ("Row ×14") that opens with a tap.
+- Demo: the deep chain screen has presenters and a bottom bar; the labels screen uses attributed and formatted
+  texts behind a condition, like a design system's text.
+
 ## 0.2.10
 
 - Components list v2, made for a phone: one compact row per view (name, then frame and the view it is in), no

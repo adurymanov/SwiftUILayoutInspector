@@ -69,28 +69,63 @@ struct ComponentList {
 
     private static func folded(_ tree: Tree, isModifier: (InspectorNode) -> Bool) -> [Item] {
         var items: [Item] = []
-        func add(_ node: InspectorNode, parent: Int?) {
+        // Presenters and controller containers (a sheet or alert host, a `UIViewControllerRepresentable`) the size of
+        // their parent with nothing of their own to show: wrappers of the parent rather than rows.
+        // Only presenters and controller hosts by name: a map or a web view the size of its parent is content.
+        func isEmpty(_ node: InspectorNode) -> Bool {
+            tree.children(of: node).isEmpty && !hasContent(node) && Self.isPresenter(node)
+        }
+        func isHollow(_ child: InspectorNode, in parent: InspectorNode) -> Bool { isEmpty(child) && sameFrame(parent, child) }
+        func children(of node: InspectorNode) -> (kept: [InspectorNode], hollow: [InspectorNode]) {
+            let all = tree.children(of: node)
+            let hollow = all.filter { isHollow($0, in: node) }
+            return (all.filter { child in !hollow.contains { $0 === child } }, hollow)
+        }
+        func add(_ node: InspectorNode, parent: Int?, absorbing: [InspectorNode] = []) {
             var chain = [node]
-            while let last = chain.last, case let below = tree.children(of: last), below.count == 1,
-                  sameFrame(last, below[0]) || (isDegenerate(below[0]) && !tree.children(of: below[0]).isEmpty) {
-                chain.append(below[0])
+            var hollow = absorbing
+            while let last = chain.last, case let below = children(of: last), below.kept.count == 1,
+                  sameFrame(last, below.kept[0]) || (isDegenerate(below.kept[0]) && !tree.children(of: below.kept[0]).isEmpty) {
+                hollow += below.hollow
+                chain.append(below.kept[0])
             }
             let innermost = chain[chain.count - 1]
+            let below = children(of: innermost)
+            hollow += below.hollow
             guard let row = chain.last(where: { !isModifier($0) && TypeNames.isAppType($0.typeName) }) ?? chain.last(where: { !isModifier($0) }) else {
                 // Only modifiers, around views of other sizes: not a row, their views belong to the parent.
-                tree.children(of: innermost).forEach { add($0, parent: parent) }
+                below.kept.forEach { add($0, parent: parent) }
                 return
             }
             let index = items.count
             let position = chain.firstIndex { $0 === row } ?? 0
             let target = isDegenerate(row) ? (chain[..<position].last { !isDegenerate($0) } ?? row) : row
-            items.append(Item(node: row, wrappers: chain.filter { $0 !== row }, target: target, parent: parent,
+            items.append(Item(node: row, wrappers: chain.filter { $0 !== row } + hollow, target: target, parent: parent,
                               module: TypeNames.module(of: row.typeName), order: index))
             if let parent { items[parent].children.append(index) }
-            tree.children(of: innermost).forEach { add($0, parent: index) }
+            below.kept.forEach { add($0, parent: index) }
         }
-        tree.roots.forEach { add($0, parent: nil) }
+        // At the top there is no parent to fold into: an empty root goes with a root of its size that has content.
+        let roots = tree.roots
+        let hollowRoots = roots.filter { root in isEmpty(root) && roots.contains { $0 !== root && !isEmpty($0) && sameFrame($0, root) } }
+        var absorbed = Set<ObjectIdentifier>()
+        for root in roots where !hollowRoots.contains(where: { $0 === root }) {
+            let mine = hollowRoots.filter { !absorbed.contains(ObjectIdentifier($0)) && sameFrame(root, $0) }
+            mine.forEach { absorbed.insert(ObjectIdentifier($0)) }
+            add(root, parent: nil, absorbing: mine)
+        }
         return items
+    }
+
+    static func isPresenter(_ node: InspectorNode) -> Bool {
+        let name = node.title
+        return ["Controller", "Presenter", "Presentation", "Modal", "Coordinator", "Router"].contains { name.contains($0) }
+    }
+
+    /// Anything drawn inside: text, an image, a shape or color, a control. Platform views alone (a controller's host)
+    /// don't count.
+    static func hasContent(_ node: InspectorNode) -> Bool {
+        node.first { $0 !== node && [.text, .image, .shape, .color, .control, .divider].contains($0.kind) } != nil
     }
 
     static func isDegenerate(_ node: InspectorNode) -> Bool {
@@ -200,6 +235,50 @@ struct ComponentList {
             rows.sort { ($0.frame.area, -$0.order) > ($1.frame.area, -$1.order) }
         }
         return rows
+    }
+
+    /// A row of the list: one component, or a run of siblings of one type ("Row ×14") that opens with a tap.
+    enum Entry: Identifiable {
+        case item(Item)
+        case group(key: String, items: [Item])
+        /// Above an opened group: folds it again.
+        case close(key: String, items: [Item])
+
+        var id: String {
+            switch self {
+            case let .item(item): "\(item.id)"
+            case let .group(key, _): key
+            case let .close(key, _): "close:" + key
+            }
+        }
+    }
+
+    /// Runs of three or more siblings of one type, next to each other in `rows`, become one group unless `expanded`
+    /// holds its key. Only in screen order without a picked point or a search: there the order is the screen's.
+    func entries(_ rows: [Item], filter: Filter, context: Context, expanded: Set<String>, selected: Int? = nil) -> [Entry] {
+        guard filter.sort == .screen, context.point == nil, context.query.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return rows.map(Entry.item)
+        }
+        var result: [Entry] = []
+        var index = 0
+        while index < rows.count {
+            var end = index + 1
+            while end < rows.count, rows[end].node.typeName == rows[index].node.typeName, rows[end].parent == rows[index].parent { end += 1 }
+            let run = Array(rows[index..<end])
+            // Stable across captures: the parent's type and the run's type.
+            let parentType = rows[index].parent.map { items(folded: filter.hidesWrappers)[$0].node.typeName } ?? "-"
+            let key = "\(parentType):\(rows[index].node.typeName)"
+            if run.count >= 3, !expanded.contains(key), !run.contains(where: { $0.node.id == selected }) {
+                result.append(.group(key: key, items: run))
+            } else if run.count >= 3, expanded.contains(key) {
+                result.append(.close(key: key, items: run))
+                result += run.map(Entry.item)
+            } else {
+                result += run.map(Entry.item)
+            }
+            index = end
+        }
+        return result
     }
 
     /// Has a size, is on screen and isn't hidden by a presentation above it.

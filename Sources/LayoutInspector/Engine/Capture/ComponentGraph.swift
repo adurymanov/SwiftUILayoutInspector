@@ -10,15 +10,17 @@ struct GraphView {
     /// The node that holds the view's value (the struct its parent built).
     let valueNode: UInt32
     let type: Any.Type
+    /// The box SwiftUI recorded for the first view its `body` produced (`nil` when none is recorded, e.g. off screen).
+    var frame: CGRect?
 }
 
 /// Finds the AttributeGraph views behind the components of a capture.
 ///
 /// The graph often holds more views of a type than the capture shows (rows of a lazy stack off screen, hidden copies),
-/// and lists them in an order of its own (rows of a `ForEach` come in another order on iOS 26 than on iOS 27). A
-/// component is matched to the view built with the texts it shows: a design-system text component built with
-/// "Payment 3" is the one whose `Text` says so. Views no text tells apart pair up with the components left, in screen
-/// order, when there are as many of both; otherwise the components share those views' total.
+/// and lists them in an order of its own. Each view is tied to the box SwiftUI recorded for the first view its `body`
+/// produced: the element of a produced view has a value that resolves (through `AGGraphGetIndirectAttribute`) to the
+/// `body` node that built it, and the capture keeps the same recorded box for each component. Views no box ties are
+/// matched by the texts they were built with; components left over share their views' total.
 enum ComponentGraph {
     struct Match {
         /// One view when the component was told apart, otherwise the views of its type it couldn't be told from.
@@ -48,14 +50,25 @@ enum ComponentGraph {
         var result: [Int: Match] = [:]
         for (type, nodes) in components {
             guard var left = views[type], !left.isEmpty else { continue }
-            var unmatched: [InspectorNode] = []
             if left.count == 1, nodes.count == 1 {
                 result[nodes[0].id] = Match(views: left)
                 continue
             }
+            // By the recorded box. Two views with one box (a copy at the same place) are left to the texts.
+            var byText: [InspectorNode] = []
+            for node in nodes.sorted(by: { $0.id < $1.id }) {
+                let boxed = node.recordedFrame.map { box in left.indices.filter { left[$0].frame.map { $0.isClose(to: box) } ?? false } } ?? []
+                if boxed.count == 1 {
+                    result[node.id] = Match(views: [left.remove(at: boxed[0])])
+                } else {
+                    byText.append(node)
+                }
+            }
+            guard !byText.isEmpty, !left.isEmpty else { continue }
+            var unmatched: [InspectorNode] = []
             // By text: the view whose own strings cover most of the component's texts, when that view is the only one.
             var strings = left.map(Self.strings(of:))
-            for node in nodes.sorted(by: { $0.id < $1.id }) {
+            for node in byText {
                 let texts = Self.texts(in: node)
                 guard !texts.isEmpty else { unmatched.append(node); continue }
                 let overlaps = strings.map { $0.intersection(texts).count }
@@ -134,32 +147,73 @@ enum ComponentGraph {
         Set(views(in: capture).compactMap { name, views in views.first.map { $0.type is any ViewModifier.Type } == true ? name : nil })
     }
 
-    /// Every app view under `host`, by type.
+    /// Every app view under `host`, by type, with the box of the first view its `body` produced.
     static func views(of host: UIView) -> [String: [GraphView]] {
         guard RenderProfiler.isAvailable, let subgraph = AttributeGraphTree.rootSubgraph(of: host),
               let root = LIAGSubgraphGetTreeRoot(subgraph) else { return [:] }
-        var result: [String: [GraphView]] = [:]
+        var views: [GraphView] = []
+        var names: [String] = []
+        var byNode: [UInt32: Int] = [:]
         var children = [LIAGTreeElement?](repeating: nil, count: 1024)
         // Generous: a view's body node can come after every node of a long modifier chain.
         var nodes = [UInt32](repeating: 0, count: 1024)
-        func visit(_ element: LIAGTreeElement, depth: Int) {
+        func elements(of element: LIAGTreeElement) -> [LIAGTreeElement] {
+            let n = Int(children.withUnsafeMutableBufferPointer { LIAGTreeElementGetChildren(element, $0.baseAddress!, Int32($0.count)) })
+            return children[0..<n].compactMap { $0 }.reversed()
+        }
+        // The app's views and the nodes they own.
+        func collect(_ element: LIAGTreeElement, depth: Int) {
             if let meta = LIAGTreeElementGetType(element) {
                 let type = unsafeBitCast(meta, to: Any.Type.self)
                 let name = TypeNames.qualifiedName(of: type)
                 if TypeNames.isAppType(name) {
                     let n = Int(nodes.withUnsafeMutableBufferPointer { LIAGTreeElementGetNodes(element, $0.baseAddress!, Int32($0.count)) })
+                    let owned = Array(nodes[0..<max(n, 0)])
+                    for node in owned { byNode[node] = views.count }
                     // Modifiers often own no nodes of their own; they are listed all the same.
-                    result[name, default: []].append(GraphView(nodes: Array(nodes[0..<max(n, 0)]),
-                                                               valueNode: LIAGTreeElementGetValue(element), type: type))
+                    views.append(GraphView(nodes: owned, valueNode: LIAGTreeElementGetValue(element), type: type))
+                    names.append(name)
                 }
             }
             guard depth < 400 else { return }
-            let n = Int(children.withUnsafeMutableBufferPointer { LIAGTreeElementGetChildren(element, $0.baseAddress!, Int32($0.count)) })
-            let list = children[0..<n].compactMap { $0 }
-            for child in list.reversed() { visit(child, depth: depth + 1) }
+            for child in elements(of: element) { collect(child, depth: depth + 1) }
         }
-        visit(root, depth: 0)
+        collect(root, depth: 0)
+        // The views their bodies produced (elements of flags 0, whose value resolves to a body node), and the first box
+        // recorded at or below each, as `_ViewDebug` gives the capture.
+        func place(_ element: LIAGTreeElement, waiting: [Int], depth: Int) {
+            var waiting = waiting
+            if LIAGTreeElementGetFlags(element) == 0 {
+                let source = LIAGGraphGetIndirectAttribute(LIAGTreeElementGetValue(element))
+                if let index = byNode[source], views[index].frame == nil, !waiting.contains(index) { waiting.append(index) }
+                if !waiting.isEmpty, let box = recordedBox(of: element) {
+                    for index in waiting where views[index].frame == nil { views[index].frame = box }
+                    waiting = []
+                }
+            }
+            guard depth < 400 else { return }
+            for child in elements(of: element) { place(child, waiting: waiting, depth: depth + 1) }
+        }
+        place(root, waiting: [], depth: 0)
+        var result: [String: [GraphView]] = [:]
+        for (name, view) in zip(names, views) { result[name, default: []].append(view) }
         return result
+    }
+
+    private static func recordedBox(of element: LIAGTreeElement) -> CGRect? {
+        var position: UInt32 = 0, size: UInt32 = 0
+        var positionType: UnsafeRawPointer?, sizeType: UnsafeRawPointer?
+        guard LIAGTreeElementGetGeometry(element, &position, &positionType, &size, &sizeType),
+              let positionType, let sizeType else { return nil }
+        func read<T>(_ attribute: UInt32, _ type: UnsafeRawPointer, as _: T.Type) -> T? {
+            guard let value = LIAGGraphGetValue(attribute, type) else { return nil }
+            func size<V>(_: V.Type) -> Int { MemoryLayout<V>.size }
+            // `ViewOrigin` starts with its point, `ViewSize` with its size.
+            guard _openExistential(unsafeBitCast(type, to: Any.Type.self), do: size) >= MemoryLayout<T>.size else { return nil }
+            return value.loadUnaligned(as: T.self)
+        }
+        guard let origin = read(position, positionType, as: CGPoint.self), let extent = read(size, sizeType, as: CGSize.self) else { return nil }
+        return CGRect(origin: origin, size: extent)
     }
 
     /// The view's current value, as its parent built it. `nil` when the graph can't be read.
@@ -172,3 +226,4 @@ enum ComponentGraph {
 }
 
 #endif
+
