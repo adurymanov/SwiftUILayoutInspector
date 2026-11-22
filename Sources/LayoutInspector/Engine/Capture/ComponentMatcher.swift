@@ -4,8 +4,8 @@ import Foundation
 
 /// What matching a capture's components to the graph's views needs, as plain values: read from a live capture and
 /// graph by ``ComponentGraph``, or loaded from a recorded fixture (`LAYOUT_INSPECTOR_MATCH_DUMP`) to replay offline.
-struct MatchInput: Codable {
-    struct View: Codable {
+nonisolated struct MatchInput: Codable {
+    nonisolated struct View: Codable {
         var type: String
         /// The nearest app view around it, an index into ``MatchInput/views``.
         var parent: Int?
@@ -19,7 +19,7 @@ struct MatchInput: Codable {
         var strings: [String]?
     }
 
-    struct Component: Codable {
+    nonisolated struct Component: Codable {
         /// ``InspectorNode/id`` of the captured node.
         var id: Int
         var type: String
@@ -41,7 +41,7 @@ struct MatchInput: Codable {
     var components: [Component] = []
 }
 
-extension CGRect {
+nonisolated extension CGRect {
     init?(_ values: [Double]?) {
         guard let values, values.count == 4 else { return nil }
         self.init(x: values[0], y: values[1], width: values[2], height: values[3])
@@ -52,12 +52,18 @@ extension CGRect {
 
 /// Ties components to views (see ``ComponentGraph``): from the outside in, each inside the view of the nearest
 /// component around it that was told apart, then by the recorded box, the texts, and what is left shares a total.
-struct ComponentMatcher {
+nonisolated struct ComponentMatcher {
     let input: MatchInput
     /// The strings a view was built with, read only when the texts have to decide.
     let strings: (Int) -> Set<String>
 
     private let byType: [String: [Int]]
+    /// ``MatchInput/View/parent`` of each view, -1 for none: read on every step up a chain, without copying the view.
+    private let parents: [Int]
+    private let children: [[Int]]
+    /// Each view's type as a number, by ``typeIDs``.
+    private let types: [Int]
+    private let typeIDs: [String: Int]
     private let frames: [CGRect?]
     private let bounds: [CGRect?]
 
@@ -67,11 +73,22 @@ struct ComponentMatcher {
         var byType: [String: [Int]] = [:]
         for (index, view) in input.views.enumerated() { byType[view.type, default: []].append(index) }
         self.byType = byType
+        parents = input.views.map { $0.parent ?? -1 }
+        var children = [[Int]](repeating: [], count: input.views.count)
+        for (index, parent) in parents.enumerated() where parent >= 0 { children[parent].append(index) }
+        self.children = children
+        var typeIDs: [String: Int] = [:]
+        types = input.views.map { view in
+            if let id = typeIDs[view.type] { return id }
+            typeIDs[view.type] = typeIDs.count
+            return typeIDs.count - 1
+        }
+        self.typeIDs = typeIDs
         frames = input.views.map { CGRect($0.frame) }
         bounds = input.views.map { CGRect($0.bounds) }
     }
 
-    private struct Scope: Hashable {
+    private nonisolated struct Scope: Hashable {
         /// The view of the nearest component around that was told apart.
         var around: Int?
         var host: Int?
@@ -124,9 +141,19 @@ struct ComponentMatcher {
                 // can be that view. Of the views left, the ones inside the nearest component around come first, then
                 // the ones beside it (``tier(of:outer:owner:)``).
                 var tiers: [Int: [Int]] = [:]
-                for view in byType[scope.type] ?? [] where !used.contains(view) {
-                    let found = tier(of: view, outer: outer, owner: owner)
-                    if found >= 0 { tiers[found, default: []].append(view) }
+                // Most often the views are inside the nearest component around: looked for there first, in its
+                // subtree, rather than among every view of the type.
+                if let inner = outer.first, let type = typeIDs[scope.type] {
+                    let inside = views(of: type, inside: inner, owner: owner).filter {
+                        !used.contains($0) && tier(of: $0, outer: outer, owner: owner) == 0
+                    }
+                    if !inside.isEmpty { tiers[0] = inside }
+                }
+                if tiers.isEmpty {
+                    for view in byType[scope.type] ?? [] where !used.contains(view) {
+                        let found = tier(of: view, outer: outer, owner: owner)
+                        if found >= 0 { tiers[found, default: []].append(view) }
+                    }
                 }
                 // Inside the nearest component around first. AttributeGraph doesn't always nest views the way the
                 // capture does (a `TimelineView`'s content sits under the view that placed it, and a scroll view's
@@ -144,12 +171,25 @@ struct ComponentMatcher {
                 var rivals: [Int] = []
                 if tier > 0, tier < 2 * outer.count {
                     let free = (byType[scope.type] ?? []).filter { !used.contains($0) }
+                    let ours = Set(candidates)
+                    // Components with the same views around them have the same candidates.
+                    var byOuter: [[Int]: Bool] = [:]
                     rivals = level.filter { other in
                         guard components[other].type == scope.type, result[other] == nil, !members.contains(other) else { return false }
                         let theirs = around(other)
-                        let tiers = free.map { self.tier(of: $0, outer: theirs, owner: owner) }
-                        guard let best = tiers.filter({ $0 >= 0 }).min() else { return false }
-                        return zip(free, tiers).contains { view, tier in tier == best && candidates.contains(view) }
+                        if let known = byOuter[theirs] { return known }
+                        // A rival when the nearest of our candidates for it is as near as any free view: our candidates
+                        // first (a few), then the free views only while one could be nearer.
+                        let nearest = candidates.map { self.tier(of: $0, outer: theirs, owner: owner) }.filter { $0 >= 0 }.min()
+                        let isRival = nearest.map { nearest in
+                            !free.contains { view in
+                                guard nearest > 0, !ours.contains(view) else { return false }
+                                let tier = self.tier(of: view, outer: theirs, owner: owner)
+                                return tier >= 0 && tier < nearest
+                            }
+                        } ?? false
+                        byOuter[theirs] = isRival
+                        return isRival
                     }
                 }
                 let mayTellApart = rivals.isEmpty
@@ -204,17 +244,30 @@ struct ComponentMatcher {
         }
     }
 
+    /// The views of `type` inside `view` and not inside a view a component owns, in the graph's order.
+    private func views(of type: Int, inside view: Int, owner: [Int: Int]) -> [Int] {
+        var result: [Int] = []
+        var stack = children[view]
+        while let next = stack.popLast() {
+            guard owner[next] == nil else { continue }
+            if types[next] == type { result.append(next) }
+            stack += children[next]
+        }
+        return result.sorted()
+    }
+
     /// The app views inside `view`, in the graph's order.
     private func descendants(of view: Int) -> [Int] {
         var result: [Int] = []
-        var inside: Set<Int> = [view]
+        var stack = [view]
         // A view comes after the view around it in the graph's order.
-        for index in (view + 1)..<input.views.count {
-            guard let parent = input.views[index].parent, inside.contains(parent) else { continue }
-            inside.insert(index)
-            result.append(index)
+        while let next = stack.popLast() {
+            for child in children[next] where child > next {
+                result.append(child)
+                stack.append(child)
+            }
         }
-        return result
+        return result.sorted()
     }
 
     /// Where `view` is for a component with `outer` around it (the views of the components around it that were told
@@ -222,12 +275,13 @@ struct ComponentMatcher {
     /// container gets from its caller, like a grid's cards, sits in AttributeGraph under the caller), 2 × outer.count
     /// outside all; -1 inside a view another component owns.
     private func tier(of view: Int, outer: [Int], owner: [Int: Int]) -> Int {
-        var next = input.views[view].parent
-        while let index = next, owner[index] == nil {
-            if let k = outer.firstIndex(where: { input.views[$0].parent == index }) { return 2 * k + 1 }
-            next = input.views[index].parent
+        var next = parents[view]
+        while next >= 0, owner[next] == nil {
+            if let k = outer.firstIndex(where: { parents[$0] == next }) { return 2 * k + 1 }
+            next = parents[next]
         }
-        return next.map { view in outer.firstIndex(of: view).map { 2 * $0 } ?? -1 } ?? 2 * outer.count
+        guard next >= 0 else { return 2 * outer.count }
+        return outer.firstIndex(of: next).map { 2 * $0 } ?? -1
     }
 
     /// Away from the nearest component, with other components of the type waiting for the same views: only a box that

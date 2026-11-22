@@ -129,11 +129,29 @@ struct ComponentList {
         func isEmpty(_ node: InspectorNode) -> Bool {
             tree.children(of: node).isEmpty && !hasContent(node) && Self.isPresenter(node)
         }
-        func isHollow(_ child: InspectorNode, in parent: InspectorNode) -> Bool { isEmpty(child) && sameFrame(parent, child) }
+        /// No components inside but modifiers.
+        func isLeaf(_ node: InspectorNode) -> Bool {
+            tree.children(of: node).allSatisfy { isModifier($0) && isLeaf($0) }
+        }
+        // Inside a component, a leaf that draws nothing the capture sees (a touch catcher, a size reader, an empty
+        // overlay) or a single text (a design system's text style) is part of the component around it rather than a
+        // row. A leaf named for platform content (a player, a map) is content, though the capture can't see into it;
+        // a leaf with more than one text (a row of a list) is a component of its own.
+        func isPlumbing(_ child: InspectorNode) -> Bool {
+            guard isLeaf(child) else { return false }
+            let drawn = Self.drawn(in: child)
+            if drawn.isEmpty { return !Self.isPresenter(child) && !Self.isPlatformContentName(child.title) }
+            return drawn.count == 1 && drawn[0].kind == .text
+        }
+        func isHollow(_ child: InspectorNode, in parent: InspectorNode) -> Bool {
+            (isEmpty(child) && sameFrame(parent, child)) || isPlumbing(child)
+        }
+        /// A folded child with the modifiers inside it.
+        func withInsides(_ node: InspectorNode) -> [InspectorNode] { [node] + tree.children(of: node).flatMap(withInsides) }
         func children(of node: InspectorNode) -> (kept: [InspectorNode], hollow: [InspectorNode]) {
             let all = tree.children(of: node)
             let hollow = all.filter { isHollow($0, in: node) }
-            return (all.filter { child in !hollow.contains { $0 === child } }, hollow)
+            return (all.filter { child in !hollow.contains { $0 === child } }, hollow.flatMap(withInsides))
         }
         func add(_ node: InspectorNode, parent: Int?, absorbing: [InspectorNode] = []) {
             var chain = [node]
@@ -185,6 +203,18 @@ struct ComponentList {
     /// don't count.
     static func hasContent(_ node: InspectorNode) -> Bool {
         node.first { $0 !== node && [.text, .image, .shape, .color, .control, .divider].contains($0.kind) } != nil
+    }
+
+    /// What is drawn inside: texts, images, shapes, colors, controls, dividers, platform views.
+    static func drawn(in node: InspectorNode) -> [InspectorNode] {
+        var result: [InspectorNode] = []
+        node.forEach { if $0 !== node, [.text, .image, .shape, .color, .control, .divider, .platform].contains($0.kind) { result.append($0) } }
+        return result
+    }
+
+    /// Named for content the capture can't see into: a `UIViewRepresentable`, a player, a map, a web view.
+    static func isPlatformContentName(_ title: String) -> Bool {
+        ["Representable", "Player", "Video", "Camera", "Map", "Web"].contains { title.contains($0) }
     }
 
     static func isDegenerate(_ node: InspectorNode) -> Bool {
@@ -428,7 +458,7 @@ struct ComponentList {
     }
 }
 
-extension CGRect {
+nonisolated extension CGRect {
     var area: CGFloat { isNull ? 0 : width * height }
 
     func isClose(to other: CGRect, tolerance: CGFloat = 0.5) -> Bool {

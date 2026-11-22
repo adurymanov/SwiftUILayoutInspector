@@ -331,18 +331,35 @@ final class RenderHeatmap {
     /// Timings of the last `map` and `read`, for the log.
     private(set) var lastMapDuration: TimeInterval = 0
     private(set) var lastReadDuration: TimeInterval = 0
-    /// The parts of the last mapping: reading the graph's views, matching, classifying the nodes; and its longest step.
-    private(set) var lastMapParts: (forest: TimeInterval, match: TimeInterval, classify: TimeInterval, longestStep: TimeInterval) = (0, 0, 0, 0)
+    /// Main-thread time of a mapping by part (reading the graph's views, matching, classifying the nodes), its longest
+    /// step, how often the matcher ran in the background, and the time from start to end.
+    struct MapParts {
+        var forest: TimeInterval = 0
+        var match: TimeInterval = 0
+        var classify: TimeInterval = 0
+        var longestStep: TimeInterval = 0
+        var matchRuns = 0
+        var started = CACurrentMediaTime()
+        var wall: TimeInterval = 0
+    }
 
-    private var pending: (capture: InspectorCapture, forest: ComponentGraph.ForestBuilder?, matches: [Int: ComponentGraph.Match]?)?
-    private var parts: (forest: TimeInterval, match: TimeInterval, classify: TimeInterval, longestStep: TimeInterval) = (0, 0, 0, 0)
+    /// The parts of the last mapping.
+    private(set) var lastMapParts = MapParts()
+
+    private var pending: (capture: InspectorCapture, forest: ComponentGraph.ForestBuilder?, matching: ComponentGraph.MatchJob?,
+                          matches: [Int: ComponentGraph.Match]?)?
+    private var parts = MapParts()
+    /// A step's budget for reading strings for the matcher; a step reads at least one view.
+    static let stepBudget: CFTimeInterval = 0.008
 
     /// A mapping started by ``beginMap(_:)`` isn't done yet.
     var isMapping: Bool { pending != nil }
 
-    /// Maps `capture` at once.
+    /// Maps `capture` at once, matching on this thread.
     func map(_ capture: InspectorCapture) {
         beginMap(capture)
+        while pending?.forest != nil { mapStep() }
+        if pending?.matches == nil { pending?.matches = ComponentGraph.match(capture) }
         while !mapStep() {}
     }
 
@@ -351,8 +368,8 @@ final class RenderHeatmap {
     func beginMap(_ capture: InspectorCapture) {
         guard mappedCapture !== capture, pending?.capture !== capture else { return }
         let cached = ComponentGraph.cachedForest(of: capture) != nil
-        pending = (capture, cached ? nil : ComponentGraph.ForestBuilder(capture), nil)
-        parts = (0, 0, 0, 0)
+        pending = (capture, cached ? nil : ComponentGraph.ForestBuilder(capture), nil, ComponentGraph.cachedMatch(of: capture))
+        parts = MapParts()
     }
 
     /// One step of the mapping in progress. `true` when there is none left.
@@ -371,8 +388,12 @@ final class RenderHeatmap {
             return false
         }
         guard let matches = job.matches else {
-            pending?.matches = ComponentGraph.match(job.capture)
+            // The matcher runs in the background; a step here starts it or reads the strings it asks for.
+            let matching = job.matching ?? ComponentGraph.MatchJob(job.capture)
+            pending?.matching = matching
+            pending?.matches = matching.step(until: start + Self.stepBudget)
             parts.match += CACurrentMediaTime() - start
+            parts.matchRuns = matching.runs
             return false
         }
         mappedCapture = job.capture
@@ -386,6 +407,7 @@ final class RenderHeatmap {
         profiler.prepare(owners, known: ComponentGraph.cachedForest(of: job.capture)?.isBody ?? [:])
         parts.classify += CACurrentMediaTime() - start
         parts.longestStep = max(parts.longestStep, CACurrentMediaTime() - start)
+        parts.wall = CACurrentMediaTime() - parts.started
         lastMapParts = parts
         lastMapDuration = parts.forest + parts.match + parts.classify
         pending = nil

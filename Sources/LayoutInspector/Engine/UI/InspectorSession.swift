@@ -453,7 +453,8 @@ final class InspectorSession: ObservableObject {
         let parts = heatmap.lastMapParts
         func ms(_ t: TimeInterval) -> Double { (t * 10000).rounded() / 10 }
         return ["total": ms(heatmap.lastMapDuration), "forest": ms(parts.forest), "match": ms(parts.match),
-                "classify": ms(parts.classify), "longestStep": ms(parts.longestStep), "read": ms(heatmap.lastReadDuration)]
+                "classify": ms(parts.classify), "longestStep": ms(parts.longestStep), "read": ms(heatmap.lastReadDuration),
+                "matchRuns": Double(parts.matchRuns), "wall": ms(parts.wall)]
     }
 
     var selectedNode: InspectorNode? { selectedID.flatMap { capture?.node(withID: $0) } }
@@ -517,7 +518,8 @@ final class InspectorSession: ObservableObject {
         if Self.logs {
             let parts = heatmap.lastMapParts
             NSLog("%@", "LayoutInspector re-renders: map \(Int(heatmap.lastMapDuration * 1000)) ms (forest \(Int(parts.forest * 1000)), "
-                  + "match \(Int(parts.match * 1000)), classify \(Int(parts.classify * 1000)), longest step \(Int(parts.longestStep * 1000))), "
+                  + "match \(Int(parts.match * 1000)) in \(parts.matchRuns) runs, classify \(Int(parts.classify * 1000)), "
+                  + "longest step \(Int(parts.longestStep * 1000)), wall \(Int(parts.wall * 1000))), "
                   + "read \(Int(heatmap.lastReadDuration * 1000)) ms, \(counts.byNode.count) views")
         }
         guard counts != renderCounts else { return }

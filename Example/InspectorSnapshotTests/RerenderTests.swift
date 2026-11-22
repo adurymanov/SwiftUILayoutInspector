@@ -315,6 +315,40 @@ final class RerenderTests: XCTestCase {
         return nil
     }
 
+    /// Mapping in steps, as the inspector does it on screen: the matcher runs in the background and the main thread only
+    /// reads the forest a host at a time and the strings the matcher asks for. Same matches as mapping at once.
+    func test_mapInSteps_keepsStepsShortAndMatchesTheSame() async throws {
+        guard RenderProfiler.isAvailable else { throw XCTSkip("AttributeGraph profiling is not available") }
+        let harness = ScreenHarness(MarketsScreen(model: MarketsModel(), showsShimmer: false))
+        defer { harness.tearDown() }
+        let capture = try await harness.waitUntilLoaded()
+        let heatmap = RenderHeatmap()
+        heatmap.profiler.start(hosts: Self.hosts(in: harness.window))
+        defer { heatmap.profiler.stop() }
+        try Self.skipWithoutGraph(heatmap)
+        let direct = ComponentGraph.match(capture)
+
+        ComponentGraph.forgetMatches()
+        heatmap.beginMap(capture)
+        var frames = 0
+        while !heatmap.mapStep() {
+            frames += 1
+            try await Task.sleep(for: .milliseconds(2))
+            XCTAssertLessThan(frames, 5000, "mapping never ends")
+            if frames >= 5000 { return }
+        }
+        let parts = heatmap.lastMapParts
+        print("RerenderTests map in steps: \(frames) frames, longest step \(Int(parts.longestStep * 1000)) ms, match on main "
+              + "\(Int(parts.match * 1000)) ms in \(parts.matchRuns) runs, wall \(Int(parts.wall * 1000)) ms")
+        XCTAssertGreaterThanOrEqual(parts.matchRuns, 1)
+        XCTAssertLessThan(parts.longestStep, 0.07, "longest main-thread step of the mapping")
+        let stepped = try XCTUnwrap(ComponentGraph.cachedMatch(of: capture))
+        XCTAssertEqual(Set(stepped.keys), Set(direct.keys))
+        for (id, match) in direct {
+            XCTAssertEqual(stepped[id]?.views.map(\.valueNode), match.views.map(\.valueNode), "component \(id)")
+        }
+    }
+
     private static func skipWithoutGraph(_ heatmap: RenderHeatmap) throws {
         if !heatmap.profiler.hasGraphs { throw XCTSkip("no view graph on this iOS version (iOS 18): nothing to count") }
     }
@@ -350,3 +384,4 @@ private struct SheetHost: View {
             }
     }
 }
+

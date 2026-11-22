@@ -178,6 +178,30 @@ final class ComponentListTests: XCTestCase {
         XCTAssertFalse(entries.contains { if case let .item(item) = $0 { ["PriceDelta", "InstrumentIcon"].contains(item.node.title) } else { false } }, describe)
     }
 
+    /// A leaf that draws nothing (a touch catcher, a size reader) and a leaf with a single text (a design system's text
+    /// style) fold into the component around them; a leaf with two texts stays a row.
+    func test_plumbingAndBareText_foldIntoTheirComponent() async throws {
+        let harness = ScreenHarness(PlumbingScreen())
+        defer { harness.tearDown() }
+        let capture = try await harness.waitUntilLoaded(timeout: .seconds(20))
+        capture.resolveFrames(in: harness.window)
+        try XCTSkipIf(!capture.nodes(.component).contains { $0.title == "PlumbingCard" }, "no component names on this iOS version (iOS 18)")
+        let list = list(capture)
+        let rows = list.rows(ComponentList.Filter(), ComponentList.Context(bounds: harness.window.bounds))
+        let text = list.text(rows, in: list.folded, counts: nil)
+        XCTAssertEqual(rows.filter { $0.node.title == "PlumbingCard" }.count, 2, text)
+        XCTAssertEqual(rows.filter { $0.node.title == "TwoTextLine" }.count, 2, text)
+        XCTAssertFalse(rows.contains { ["StyledLabel", "SizeReader"].contains($0.node.title) }, text)
+        for title in ["StyledLabel", "SizeReader"] {
+            let nodes = capture.swiftUINodes.filter { $0.kind == .component && $0.title == title }
+            XCTAssertFalse(nodes.isEmpty, title)
+            for node in nodes {
+                let owner = list.folded.first { $0.wrappers.contains { $0 === node } }
+                XCTAssertEqual(owner?.node.title, "PlumbingCard", "\(title) folds into its card")
+            }
+        }
+    }
+
     /// The Module menu lists the screen's modules, keeps the rows of the one picked, and forgets a module the next
     /// screen doesn't have.
     func test_moduleFilter() async throws {
@@ -322,4 +346,54 @@ final class ComponentListTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(50))
         }
     }
+}
+
+private struct PlumbingScreen: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            PlumbingCard(title: "Savings", amount: "$40")
+            PlumbingCard(title: "Credit", amount: "$12")
+        }
+        .padding()
+    }
+}
+
+private struct PlumbingCard: View {
+    let title: String
+    let amount: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            StyledLabel(text: title)
+            TwoTextLine(left: "Balance", right: amount)
+        }
+        .padding()
+        .background(RoundedRectangle(cornerRadius: 12).fill(.gray.opacity(0.2)))
+        .background(SizeReader())
+    }
+}
+
+private struct StyledLabel: View {
+    let text: String
+    var body: some View { Text(text).font(.headline).modifier(SensitiveText()) }
+}
+
+private struct SensitiveText: ViewModifier {
+    func body(content: Content) -> some View { HStack(spacing: 0) { content }.privacySensitive() }
+}
+
+private struct TwoTextLine: View {
+    let left: String
+    let right: String
+    var body: some View {
+        HStack {
+            Text(left)
+            Spacer()
+            Text(right)
+        }
+    }
+}
+
+private struct SizeReader: View {
+    var body: some View { GeometryReader { _ in EmptyView() } }
 }

@@ -59,12 +59,6 @@ static IndirectFn graphGetIndirectAttribute;
 typedef struct { const void *const *type; const void *body; } LIAttributeInfo;
 typedef LIAttributeInfo (*AttributeInfoFn)(uint32_t);
 static AttributeInfoFn graphGetAttributeInfo;
-typedef uint32_t (*SubgraphChildCountFn)(const void *);
-typedef const void *(*SubgraphChildFn)(const void *, uint32_t, uint8_t *);
-typedef LIAGTreeElement (*TreeElementParentFn)(LIAGTreeElement);
-static SubgraphChildCountFn subgraphGetChildCount;
-static SubgraphChildFn subgraphGetChild;
-static TreeElementParentFn treeElementGetParent;
 
 static MakeNodeIteratorFn makeNodeIterator;
 static NextNodeFn nextNode;
@@ -104,9 +98,6 @@ static void resolve(void) {
     treeValueType = (TreeValueTypeFn)dlsym(h, "AGTreeValueGetType");
     graphGetIndirectAttribute = (IndirectFn)dlsym(h, "AGGraphGetIndirectAttribute");
     graphGetAttributeInfo = (AttributeInfoFn)dlsym(h, "AGGraphGetAttributeInfo");
-    subgraphGetChildCount = (SubgraphChildCountFn)dlsym(h, "AGSubgraphGetChildCount");
-    subgraphGetChild = (SubgraphChildFn)dlsym(h, "AGSubgraphGetChild");
-    treeElementGetParent = (TreeElementParentFn)dlsym(h, "AGTreeElementGetParent");
 }
 
 bool LIAGIsAvailable(void) {
@@ -136,41 +127,16 @@ const void *LIAGTypeDescription(const void *type) {
 }
 
 int LIAGTreeElementGetChildren(LIAGTreeElement element, LIAGTreeElement *out, int max) {
-    return LIAGTreeElementGetChildrenIncludingSubgraphs(element, out, max, true);
-}
-
-int LIAGTreeElementGetChildrenIncludingSubgraphs(LIAGTreeElement element, LIAGTreeElement *out, int max, bool subgraphs) {
     if (!LIAGIsAvailable()) return 0;
     LIChildIterator it;
     memset(&it, 0, sizeof(it));
     it = makeChildIterator(element);
-    // `iteratedSubgraph` (offset 24): the iterator then stops after the element's own children.
-    if (!subgraphs) ((uint8_t *)&it)[24] = 1;
     int n = 0;
     LIAGTreeElement child;
     while (n < max && (child = nextChild(&it)) != NULL) {
         out[n++] = child;
     }
     return n;
-}
-
-bool LIAGSubgraphChildrenAreAvailable(void) {
-    resolve();
-    return subgraphGetChildCount && subgraphGetChild && treeElementGetParent && getTreeRoot;
-}
-
-uint32_t LIAGSubgraphGetChildCount(const void *subgraph) {
-    return LIAGSubgraphChildrenAreAvailable() ? subgraphGetChildCount(subgraph) : 0;
-}
-
-const void *LIAGSubgraphGetChild(const void *subgraph, uint32_t index) {
-    if (!LIAGSubgraphChildrenAreAvailable()) return NULL;
-    uint8_t tag = 0;
-    return subgraphGetChild(subgraph, index, &tag);
-}
-
-LIAGTreeElement LIAGTreeElementGetParent(LIAGTreeElement element) {
-    return LIAGSubgraphChildrenAreAvailable() ? treeElementGetParent(element) : NULL;
 }
 
 // MARK: - Profiling

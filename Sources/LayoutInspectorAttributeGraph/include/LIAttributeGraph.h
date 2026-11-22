@@ -25,15 +25,6 @@ uint32_t LIAGTreeElementGetValue(LIAGTreeElement _Nonnull element);
 const void * _Nullable LIAGTypeDescription(const void * _Nonnull type);
 /// Writes up to `max` children into `out`, returns the number of children written.
 int LIAGTreeElementGetChildren(LIAGTreeElement _Nonnull element, LIAGTreeElement _Nullable * _Nonnull out, int max);
-/// The same; with `subgraphs` false only the element's own children, not the roots of child subgraphs attached to it.
-/// Looking for those scans every child subgraph of the element's subgraph, for each element.
-int LIAGTreeElementGetChildrenIncludingSubgraphs(LIAGTreeElement _Nonnull element, LIAGTreeElement _Nullable * _Nonnull out, int max,
-                                                 bool subgraphs);
-/// `AGSubgraphGetChildCount`, `AGSubgraphGetChild` and `AGTreeElementGetParent` are there.
-bool LIAGSubgraphChildrenAreAvailable(void);
-uint32_t LIAGSubgraphGetChildCount(const void * _Nonnull subgraph);
-const void * _Nullable LIAGSubgraphGetChild(const void * _Nonnull subgraph, uint32_t index);
-LIAGTreeElement _Nullable LIAGTreeElementGetParent(LIAGTreeElement _Nonnull element);
 
 /// Profiling of attribute updates, for counting `body` evaluations. `false` when a symbol is missing.
 bool LIAGProfilingIsAvailable(void);

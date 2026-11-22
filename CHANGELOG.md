@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.14
+
+- Re-renders matches components to graph views off the main thread. The matcher is pure and runs on a background
+  queue; the main thread reads only the strings of the views it asks about, a few per frame (8 ms budget), and the
+  matcher runs again until a run needs nothing it didn't have, which gives the same result as reading them as it
+  goes (usually two runs). The matcher itself is about 6 times faster in debug builds (candidates are looked up in the
+  nearest component's subtree first, rivals start from our own candidates, no copies of view records on every step
+  up a chain) and ties every bundled recording exactly as 0.2.13 did (`Fixtures/MatchExpected`). On a big app's home
+  the longest main-thread step of a mapping was 222–494 ms (all of it matching); matching now takes under 20 ms of
+  main-thread time, spread over frames. `capture.rendersMap` adds `matchRuns` and `wall` (start to end).
+- Plain captures are back to 0.2.12 speed. Which app types are `ViewModifier`s is asked off the main thread while
+  the other steps run: the first conformance check of a type scans every conformance record of the app, and on a big
+  app's first screen that was 150–185 ms in one step (`reconstructIndex` 173–201 ms instead of 26–29).
+- Reading AttributeGraph trees no longer tries to skip the lookup of child subgraphs. The 0.2.13 shortcut set a byte
+  of a private iterator that moved in iOS 26, so it never took effect there, and the elements it computed from
+  parents don't match how AttributeGraph attaches subgraph trees (by the value of the tree's root among an element's
+  nodes, scanning every subgraph of the graph). Trees are read as in 0.2.12.
+- Components list with the default filters: inside a component, a leaf that draws nothing the capture sees (a touch
+  catcher, a size reader, an empty overlay) or a single text (a design system's text style) folds into the
+  component's row as a wrapper. A leaf named for platform content (`…Representable`, a player, a map, a web view)
+  and a leaf with more than one text stay rows. A big app's home goes from 41 rows to 22.
+
 ## 0.2.13
 
 - Re-renders on a big app's trading home. Content a container gets from its caller (the cards of a grid, declared

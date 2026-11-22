@@ -90,6 +90,96 @@ enum ComponentGraph {
         return (input, nodes)
     }
 
+    /// Matches a capture with the matcher off the main thread: ``ComponentMatcher`` is pure, and the main thread only
+    /// reads the strings of the views it asks about (``strings(of:)`` reads the graph), a few at a time. A run that asked
+    /// about a view not read yet is run again once they are read; the run that asked about none is the one a matcher
+    /// reading them as it goes would have made.
+    final class MatchJob {
+        private nonisolated enum State {
+            case running
+            case reading([Int])
+            case done([Int: [Int]])
+        }
+
+        /// What the background run left, guarded: written there, read on the main thread.
+        private nonisolated final class Shared: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = State.running
+            var state: State {
+                get { lock.withLock { value } }
+                set { lock.withLock { value = newValue } }
+            }
+        }
+
+        let capture: InspectorCapture
+        private let forest: Forest
+        private let input: MatchInput
+        private let nodes: [InspectorNode]
+        private var strings: [Int: Set<String>] = [:]
+        private let shared = Shared()
+        private(set) var runs = 0
+
+        init(_ capture: InspectorCapture) {
+            self.capture = capture
+            forest = ComponentGraph.forest(in: capture)
+            (input, nodes) = ComponentGraph.input(capture, forest)
+            start()
+        }
+
+        private func start() {
+            runs += 1
+            shared.state = .running
+            let input = input, known = strings, shared = shared
+            DispatchQueue.global(qos: .userInitiated).async {
+                let (result, missing) = Self.run(input, known: known)
+                shared.state = missing.isEmpty ? .done(result) : .reading(missing.sorted())
+            }
+        }
+
+        nonisolated static func run(_ input: MatchInput, known: [Int: Set<String>]) -> ([Int: [Int]], Set<Int>) {
+            guard !input.views.isEmpty else { return ([:], []) }
+            var missing = Set<Int>()
+            let result = ComponentMatcher(input) { index in
+                if let strings = known[index] { return strings }
+                missing.insert(index)
+                return []
+            }.run()
+            return (result, missing)
+        }
+
+        /// Reads the strings asked for until `deadline` (at least one view), or takes the result: the matches once done.
+        func step(until deadline: CFTimeInterval) -> [Int: Match]? {
+            switch shared.state {
+            case .running:
+                return nil
+            case var .reading(left):
+                repeat {
+                    let index = left.removeLast()
+                    strings[index] = ComponentGraph.strings(of: forest.views[index])
+                } while !left.isEmpty && CACurrentMediaTime() < deadline
+                if left.isEmpty { start() } else { shared.state = .reading(left) }
+                return nil
+            case let .done(assigned):
+                var result: [Int: Match] = [:]
+                for (index, views) in assigned { result[nodes[index].id] = Match(views: views.map { forest.views[$0] }) }
+                if ProcessInfo.processInfo.environment["LAYOUT_INSPECTOR_LOG"] != nil {
+                    logDiag(nodes: nodes, forest: forest, result: result)
+                }
+                MatchRecorder.writeIfRequested(capture, forest)
+                matchCache = (capture, result)
+                return result
+            }
+        }
+    }
+
+    /// Drops the matches worked out last (tests: to match a capture again).
+    static func forgetMatches() { matchCache = nil }
+
+    /// The matches of `capture` when it was matched already.
+    static func cachedMatch(of capture: InspectorCapture) -> [Int: Match]? {
+        matchCache.flatMap { $0.capture === capture ? $0.result : nil }
+    }
+
     private static func freshMatch(_ capture: InspectorCapture) -> [Int: Match] {
         let forest = forest(in: capture)
         guard !forest.views.isEmpty else { return [:] }
@@ -215,10 +305,16 @@ enum ComponentGraph {
         }
     }
 
-    /// Types of the capture's app views that are `ViewModifier`s, by full type name.
+    /// Types of the capture's app views that are `ViewModifier`s, by full type name. Without `readingGraph`, only from a
+    /// forest already read and only the answers already in (``ModifierTypes``): the rest is asked in the background.
     static func modifierTypes(in capture: InspectorCapture, readingGraph: Bool = true) -> Set<String> {
         guard let forest = readingGraph ? forest(in: capture) : cachedForest(of: capture) else { return [] }
-        return Set(forest.byType.compactMap { name, views in views.first.map { forest.views[$0].type is any ViewModifier.Type } == true ? name : nil })
+        let types = forest.byType.compactMap { name, views in views.first.map { (name: name, type: forest.views[$0].type) } }
+        guard readingGraph else {
+            ModifierTypes.ask(types)
+            return ModifierTypes.modifiers(among: types.map(\.name))
+        }
+        return ModifierTypes.modifiersNow(among: types)
     }
 
     /// Every app view under `host`, by type, with the box of the first view its `body` produced.
@@ -231,26 +327,16 @@ enum ComponentGraph {
 
     /// Every app view under `host` in the order of its tree, each with the view around it (an index into the same list),
     /// and the box of the first view its `body` produced.
-    static func tree(of host: UIView, checked: Bool = checksForest) -> (views: [GraphView], names: [String]) {
+    static func tree(of host: UIView) -> (views: [GraphView], names: [String]) {
         guard RenderProfiler.isAvailable, let subgraph = AttributeGraphTree.rootSubgraph(of: host),
               let root = LIAGSubgraphGetTreeRoot(subgraph) else { return ([], []) }
-        let attachments = AttributeGraphTree.subgraphAttachments(of: subgraph)
-        let result = tree(root, host: host, attachments: attachments)
-        if checked, attachments != nil {
-            let full = tree(root, host: host, attachments: nil)
-            let same = full.names == result.names && zip(full.views, result.views).allSatisfy { $0.frame == $1.frame && $0.parent == $1.parent }
-            NSLog("%@", "LayoutInspector forest check: \(same ? "same" : "DIFFERENT") (\(result.views.count) views, \(full.views.count) with every subgraph looked up)")
-        }
-        return result
+        return tree(root, host: host)
     }
-
-    /// `LAYOUT_INSPECTOR_CHECK_FOREST`: reads each tree a second time the slow way and logs whether both agree.
-    static let checksForest = ProcessInfo.processInfo.environment["LAYOUT_INSPECTOR_CHECK_FOREST"] != nil
 
     /// Whether each type is an app type, by its metadata: asked for every element of every tree.
     private static var appTypes: [UnsafeRawPointer: (name: String, isApp: Bool)] = [:]
 
-    private static func tree(_ root: LIAGTreeElement, host: UIView, attachments: Set<UnsafeRawPointer>?) -> (views: [GraphView], names: [String]) {
+    private static func tree(_ root: LIAGTreeElement, host: UIView) -> (views: [GraphView], names: [String]) {
         var views: [GraphView] = []
         var names: [String] = []
         var byNode: [UInt32: Int] = [:]
@@ -285,10 +371,7 @@ enum ComponentGraph {
                 }
             }
             guard depth < 400 else { return }
-            let withSubgraphs = attachments.map { $0.contains(element) } ?? true
-            let n = Int(children.withUnsafeMutableBufferPointer {
-                LIAGTreeElementGetChildrenIncludingSubgraphs(element, $0.baseAddress!, Int32($0.count), withSubgraphs)
-            })
+            let n = Int(children.withUnsafeMutableBufferPointer { LIAGTreeElementGetChildren(element, $0.baseAddress!, Int32($0.count)) })
             // Copied before recursing: the buffer is shared.
             for child in Array(children[0..<n]).reversed() {
                 guard let child else { continue }

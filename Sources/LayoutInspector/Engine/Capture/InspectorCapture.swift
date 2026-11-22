@@ -358,7 +358,9 @@ enum LayoutCapture {
             let capture = InspectorCapture(swiftUIRoots: roots, uikitRoot: uikit, isSwiftUIGraphAvailable: graphAvailable,
                                            duration: duration)
             capture.occlusion = Occlusion(root: root)
-            capture.modifierTypes = (reconstruction ?? lastReconstruction?.index)?.modifierTypes ?? []
+            // Asked in the background while the other steps ran: normally answered long before this one.
+            _ = measure("modifierTypes") { ModifierTypes.wait(upTo: 0.05) }
+            capture.modifierTypes = ModifierTypes.modifiers(among: (reconstruction ?? lastReconstruction?.index)?.appTypeNames ?? [])
             output.capture = capture
             lastTimings = ["total \(Int(duration * 1000)) ms"]
                 + timings.sorted { $0.value > $1.value }.map { "\($0.key) \(Int($0.value * 1000)) ms" }

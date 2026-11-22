@@ -58,72 +58,12 @@ enum AttributeGraphTree {
 
     static func tree(of host: UIView) -> Element? {
         guard isAvailable, let subgraph = rootSubgraph(of: host), let root = LIAGSubgraphGetTreeRoot(subgraph) else { return nil }
-        let attachments = subgraphAttachments(of: subgraph)
-        let tree = element(root, depth: 0, attachments: attachments)
-        if ComponentGraph.checksForest, attachments != nil {
-            func names(_ e: Element) -> [String] { [e.typeName] + e.children.flatMap(names) }
-            let same = names(tree) == names(element(root, depth: 0, attachments: nil))
-            NSLog("%@", "LayoutInspector tree check: \(same ? "same" : "DIFFERENT")")
-        }
-        return tree
+        return element(root, depth: 0)
     }
-
-    /// The elements the trees of descendant subgraphs hang from. Only these need the slow child lookup that finds those
-    /// trees: it scans the subgraph's children for every element, and a big screen has thousands of both. `nil` when
-    /// the functions are missing.
-    static func subgraphAttachments(of subgraph: UnsafeRawPointer) -> Set<UnsafeRawPointer>? {
-        guard LIAGSubgraphChildrenAreAvailable(), skipsSubgraphLookup != false else { return nil }
-        var result = Set<UnsafeRawPointer>()
-        var seen: Set<UnsafeRawPointer> = [subgraph]
-        var stack = [subgraph]
-        while let current = stack.popLast() {
-            for index in 0..<LIAGSubgraphGetChildCount(current) {
-                guard let child = LIAGSubgraphGetChild(current, index), seen.insert(child).inserted else { continue }
-                if let root = LIAGSubgraphGetTreeRoot(child), let parent = LIAGTreeElementGetParent(root) { result.insert(parent) }
-                stack.append(child)
-            }
-        }
-        if skipsSubgraphLookup == nil, let root = LIAGSubgraphGetTreeRoot(subgraph) {
-            switch childrenAgree(below: root, attachments: result) {
-            case false?: skipsSubgraphLookup = false; return nil
-            // Settled only on a tree with subgraphs hanging from it and enough elements to tell.
-            case true? where !result.isEmpty: skipsSubgraphLookup = true
-            default: break
-            }
-        }
-        return result
-    }
-
-    /// Whether leaving out the subgraph lookup (a byte of AttributeGraph's private child iterator) changes nothing, checked
-    /// on the first elements of the first tree big enough to tell: `nil` until then, while every tree is checked.
-    private static var skipsSubgraphLookup: Bool?
-
-    /// `nil`: too few elements to tell.
-    private static func childrenAgree(below root: LIAGTreeElement, attachments: Set<UnsafeRawPointer>) -> Bool? {
-        var queue = [root]
-        var checked = 0
-        var buffer = [LIAGTreeElement?](repeating: nil, count: 1024)
-        while !queue.isEmpty, checked < 200 {
-            let element = queue.removeFirst()
-            let quick = Int(buffer.withUnsafeMutableBufferPointer {
-                LIAGTreeElementGetChildrenIncludingSubgraphs(element, $0.baseAddress!, Int32($0.count), attachments.contains(element))
-            })
-            let quickChildren = Array(buffer[0..<quick])
-            let full = Int(buffer.withUnsafeMutableBufferPointer { LIAGTreeElementGetChildren(element, $0.baseAddress!, Int32($0.count)) })
-            guard full == quick else {
-                NSLog("%@", "LayoutInspector: AttributeGraph's child iterator changed; trees are read the slow way")
-                return false
-            }
-            checked += 1
-            queue += quickChildren.compactMap { $0 }
-        }
-        return checked >= 50 ? true : nil
-    }
-
 
     private static var buffer = [LIAGTreeElement?](repeating: nil, count: 1024)
 
-    private static func element(_ e: LIAGTreeElement, depth: Int, attachments: Set<UnsafeRawPointer>?) -> Element {
+    private static func element(_ e: LIAGTreeElement, depth: Int) -> Element {
         var name = "?"
         let meta = LIAGTreeElementGetType(e)
         if let meta {
@@ -131,13 +71,10 @@ enum AttributeGraphTree {
         }
         var children: [Element] = []
         if depth < 400 {
-            let withSubgraphs = attachments.map { $0.contains(e) } ?? true
-            let n = Int(buffer.withUnsafeMutableBufferPointer {
-                LIAGTreeElementGetChildrenIncludingSubgraphs(e, $0.baseAddress!, Int32($0.count), withSubgraphs)
-            })
+            let n = Int(buffer.withUnsafeMutableBufferPointer { LIAGTreeElementGetChildren(e, $0.baseAddress!, Int32($0.count)) })
             let elements = buffer[0..<n].compactMap { $0 }   // copy before recursing (the buffer is shared)
             children.reserveCapacity(elements.count)
-            for c in elements { children.append(element(c, depth: depth + 1, attachments: attachments)) }
+            for c in elements { children.append(element(c, depth: depth + 1)) }
         }
         return Element(typeName: name, typeID: meta, flags: LIAGTreeElementGetFlags(e), children: children)
     }
@@ -175,3 +112,4 @@ enum AttributeGraphTree {
 }
 
 #endif
+

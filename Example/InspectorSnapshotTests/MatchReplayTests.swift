@@ -45,6 +45,55 @@ final class MatchReplayTests: XCTestCase {
         }
     }
 
+    /// The matcher made faster in 0.2.14 ties every bundled recording as 0.2.13 did (`Fixtures/MatchExpected`, written
+    /// by the 0.2.13 matcher): component index → view indices.
+    func test_bundledRecordings_matchAsBefore() throws {
+        let expected = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/MatchExpected")
+        for url in Self.fixtures where url.deletingLastPathComponent().lastPathComponent == "Match" {
+            let input = try JSONDecoder().decode(Recording.self, from: Data(contentsOf: url)).input
+            let before = try JSONDecoder().decode([String: [Int]].self,
+                                                  from: Data(contentsOf: expected.appendingPathComponent(url.lastPathComponent)))
+            let now = Dictionary(uniqueKeysWithValues: ComponentMatcher(input).run().map { (String($0.key), $0.value) })
+            XCTAssertEqual(now, before, url.lastPathComponent)
+        }
+    }
+
+    /// The matcher off the main thread asks about the strings it needs and is run again until it asked about none
+    /// it didn't have (``ComponentGraph/MatchJob``): it ends with what reading them as it goes gives.
+    func test_runsAskingForStrings_endAsMatchingAtOnce() throws {
+        for url in Self.fixtures {
+            let input = try JSONDecoder().decode(Recording.self, from: Data(contentsOf: url)).input
+            var known: [Int: Set<String>] = [:]
+            var runs = 0
+            var result: [Int: [Int]] = [:]
+            while true {
+                runs += 1
+                let (assigned, missing) = ComponentGraph.MatchJob.run(input, known: known)
+                result = assigned
+                if missing.isEmpty || runs > 50 { break }
+                for index in missing { known[index] = Set(input.views[index].strings ?? []) }
+            }
+            print("MatchReplay \(url.lastPathComponent): \(runs) runs, \(known.count) views' strings read")
+            XCTAssertLessThanOrEqual(runs, 50, url.lastPathComponent)
+            XCTAssertEqual(result, ComponentMatcher(input).run(), url.lastPathComponent)
+        }
+    }
+
+    /// The matcher on the biggest recording (a big app's home after a scroll, 528 components, 1436 views) in a debug
+    /// build, as apps build the library: it was 220-450 ms in 0.2.13, now a fraction of that and off the main thread.
+    func test_bigRecording_matchesQuickly() throws {
+        let url = try XCTUnwrap(Self.fixtures.first { $0.lastPathComponent == "big-app-portfolio.json" })
+        let input = try JSONDecoder().decode(Recording.self, from: Data(contentsOf: url)).input
+        var best = Double.infinity
+        for _ in 0..<3 {
+            let start = CFAbsoluteTimeGetCurrent()
+            _ = ComponentMatcher(input).run()
+            best = min(best, CFAbsoluteTimeGetCurrent() - start)
+        }
+        print("MatchReplay big-app-portfolio.json: \(Int(best * 1000)) ms")
+        XCTAssertLessThan(best, 0.15, "matching the biggest recording")
+    }
+
     /// An exact pair has the same type, and the component's recorded box lies on what the view's `body` produced.
     private static func isPlausible(_ input: MatchInput, _ component: Int, _ view: Int) -> Bool {
         let c = input.components[component], v = input.views[view]

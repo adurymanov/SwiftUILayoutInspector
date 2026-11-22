@@ -1,5 +1,4 @@
 #if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
-import SwiftUI
 import UIKit
 
 /// Restores app-defined views (`ProfileHeader`, `StatsRow`, `TagCloud`…) in the `_ViewDebug` tree.
@@ -28,8 +27,9 @@ struct ComponentReconstruction {
     }
 
     private(set) var components: [Component] = []
-    /// The app's `ViewModifier` types among the trees' elements, by full type name.
-    private(set) var modifierTypes = Set<String>()
+    /// The app types among the trees' elements, by full type name: which are `ViewModifier`s is asked off the main
+    /// thread (``ModifierTypes``).
+    private(set) var appTypeNames: [String] = []
     /// Components by the chain types that may anchor them: a host whose tree has none of a component's anchors skips
     /// it without looking each one up.
     private var byAnchor: [TypeKey: [Int]] = [:]
@@ -91,9 +91,11 @@ struct ComponentReconstruction {
         }
         var instances = countsWithoutType
         for entry in countsByType.values { instances[entry.name, default: 0] += entry.count }
-        for (id, entry) in countsByType where TypeNames.isAppType(entry.name) && unsafeBitCast(id, to: Any.Type.self) is any ViewModifier.Type {
-            modifierTypes.insert(entry.name)
+        let appTypes = countsByType.compactMap { id, entry in
+            TypeNames.isAppType(entry.name) ? (name: entry.name, type: unsafeBitCast(id, to: Any.Type.self)) : nil
         }
+        appTypeNames = appTypes.map(\.name)
+        ModifierTypes.ask(appTypes)
         for i in components.indices { components[i].instances = instances[components[i].typeName] ?? 1 }
         timed("anchorIndex") {
             for component in components {
