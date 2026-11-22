@@ -357,6 +357,13 @@ final class InspectorSession: ObservableObject {
         beginCapture()
     }
 
+    /// Dev → Components list without a capture: highlights the screen in the current mode, which captures it, or
+    /// starts the capture of a highlighted screen that is still waiting for one.
+    func captureIfNeeded() {
+        guard capture == nil, job == nil else { return }
+        if isHighlighting { beginCapture() } else { highlight(configuration.mode) }
+    }
+
     /// A command from the Mac: highlight in `mode` and capture again, even if the screen is highlighted already, so the
     /// report files describe the screen as it is now.
     func agentHighlight(_ mode: LayoutInspector.Mode) {

@@ -358,10 +358,12 @@ struct InspectorToolbar: View {
                 Toggle(isOn: $session.showsZeroRenders) { Label("Show zeros", systemImage: "circle.dashed") }
             }
             Section {
-                Button { session.window?.root.presentComponentList() } label: {
+                Button {
+                    session.captureIfNeeded()
+                    session.window?.root.presentComponentList()
+                } label: {
                     Label("Components list", systemImage: "list.bullet.indent")
                 }
-                .disabled(session.capture == nil)
             }
         } label: {
             if session.isHighlighting && mode.isDevelopmentTool {
@@ -372,15 +374,21 @@ struct InspectorToolbar: View {
         }
     }
 
-    /// Checked while the screen is highlighted in `mode` (`nil` – Off). Picking a mode highlights the screen in it.
+    /// Checked while the screen is highlighted in `mode` (`nil` – Off). Picking a mode highlights the screen in it;
+    /// picking the checked mode again turns highlighting off.
     private func modeToggle(_ mode: LayoutInspector.Mode?, title: String, systemImage: String) -> some View {
         Toggle(isOn: Binding {
             highlightedMode.wrappedValue == mode
         } set: { isOn in
-            if isOn || mode == nil { highlightedMode.wrappedValue = mode }
+            highlightedMode.wrappedValue = Self.mode(afterPicking: mode, isOn: isOn, current: highlightedMode.wrappedValue)
         }) {
             Label(title, systemImage: systemImage)
         }
+    }
+
+    /// The highlighted mode after the toggle of `picked` (`nil` – Off) was set to `isOn`.
+    static func mode(afterPicking picked: LayoutInspector.Mode?, isOn: Bool, current: LayoutInspector.Mode?) -> LayoutInspector.Mode? {
+        isOn || picked == nil ? picked : (picked == current ? nil : current)
     }
 
     /// `nil` – not highlighting. Picking a mode highlights the screen in it.

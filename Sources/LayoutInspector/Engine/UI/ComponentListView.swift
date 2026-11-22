@@ -19,6 +19,9 @@ final class ComponentListModel: ObservableObject {
     var pages: [DetailPage: DetailSnapshot] = [:]
 
     private weak var capture: InspectorCapture?
+
+    /// The list is built from `capture`: the session's capture lands a turn before the list is.
+    func shows(_ capture: InspectorCapture?) -> Bool { capture != nil && capture === self.capture }
     private(set) var list = ComponentList(nil)
     private var stateful: Set<Int>?
 
@@ -125,13 +128,31 @@ struct ComponentListView: View {
             }
             .listStyle(.plain)
             .overlay {
-                if model.isPicking {
+                if !session.isHighlighting && session.capture == nil {
+                    ContentUnavailableView {
+                        Label("Highlighting is off", systemImage: "eye.slash")
+                    } description: {
+                        Text("Capture the screen to list its components.")
+                    } actions: {
+                        Button("Capture") { session.captureIfNeeded() }
+                    }
+                } else if session.capture == nil || !model.shows(session.capture) {
+                    VStack(spacing: 10) {
+                        if let progress = session.captureProgress {
+                            ProgressView(value: progress).frame(maxWidth: 200)
+                        } else {
+                            ProgressView()
+                        }
+                        Text("Capturing the screen…").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                } else if model.isPicking {
                     ContentUnavailableView("Tap the screen", systemImage: "scope",
                                            description: Text("The list will show the components under the point."))
                 } else if rows.isEmpty {
                     ContentUnavailableView("No components", systemImage: "square.on.square.dashed",
                                            description: Text(model.list.all.isEmpty
-                                                             ? "Pick a mode to capture the screen. Only views declared in the app are listed."
+                                                             ? "Only views declared in the app are listed."
                                                              : "Nothing matches the filters."))
                 }
             }
@@ -153,8 +174,10 @@ struct ComponentListView: View {
             }
             .navigationDestination(for: DetailPage.self) { page in
                 if let snapshot = model.pages[page] {
+                    let isCurrent = session.capture === snapshot.capture
                     ComponentDetailView(snapshot: snapshot,
-                                        renders: session.capture === snapshot.capture ? counts?.byNode[snapshot.node.id] : snapshot.renders,
+                                        renders: isCurrent ? counts?.byNode[snapshot.node.id] : snapshot.renders,
+                                        wrapperRenders: isCurrent ? counts?.byNode ?? [:] : snapshot.wrapperRenders,
                                         select: { session.select(sameAs: snapshot.item.target); reveal() },
                                         open: { open($0, in: snapshot.items) })
                 }
@@ -189,7 +212,8 @@ struct ComponentListView: View {
         let page = DetailPage()
         model.pages[page] = DetailSnapshot(node: node, item: item, items: items, capture: capture,
                                      details: ComponentDetails.read(node, match: ComponentGraph.match(capture)[node.id]),
-                                     renders: session.renderCounts?.byNode[node.id])
+                                     renders: session.renderCounts?.byNode[node.id],
+                                     wrapperRenders: session.renderCounts?.byNode.filter { id, _ in item.wrappers.contains { $0.id == id } } ?? [:])
         path.append(page)
     }
 }
@@ -206,6 +230,7 @@ struct DetailSnapshot {
     weak var capture: InspectorCapture?
     let details: ComponentDetails
     let renders: RenderCounts.Entry?
+    let wrapperRenders: [Int: RenderCounts.Entry]
 }
 
 // MARK: - Filters
@@ -325,17 +350,10 @@ private struct ComponentRowView: View {
                                 .fixedSize()
                                 .accessibilityLabel("\(renders.label) renders")
                         }
-                        ForEach(modifierRenders.indices, id: \.self) { index in
-                            let modifier = modifierRenders[index]
-                            Text("\(modifier.title) \(modifier.entry.label)")
-                                .font(.caption2.monospacedDigit().weight(.semibold))
-                                .lineLimit(1)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(Color(InspectorRenderer.heatColor(1)).opacity(0.2), in: Capsule())
-                                .fixedSize()
-                                .accessibilityLabel("\(modifier.title) \(modifier.entry.label) renders")
-                        }
+                    }
+                    if !modifierRenders.isEmpty {
+                        ModifierCapsules(renders: modifierRenders)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     HStack(spacing: 6) {
                         Text(caption)
@@ -352,6 +370,7 @@ private struct ComponentRowView: View {
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -365,6 +384,37 @@ private struct ComponentRowView: View {
 
     private var caption: String {
         item.frame.frameLabel + (parent.map { " · in \($0)" } ?? "")
+    }
+}
+
+/// The folded modifiers that re-rendered, under a row's name: the first few, shortened to fit, then "+N". The full
+/// list is in the row's details.
+struct ModifierCapsules: View {
+    static let shown = 2
+    let renders: [(title: String, entry: RenderCounts.Entry)]
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(renders.prefix(Self.shown).indices, id: \.self) { index in
+                let modifier = renders[index]
+                Text("\(modifier.title) \(modifier.entry.label)")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Color(InspectorRenderer.heatColor(1)).opacity(0.2), in: Capsule())
+                    .accessibilityLabel("\(modifier.title) \(modifier.entry.label) renders")
+            }
+            if renders.count > Self.shown {
+                Text("+\(renders.count - Self.shown)")
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Color.secondary.opacity(0.15), in: Capsule())
+                    .fixedSize()
+                    .accessibilityLabel("\(renders.count - Self.shown) more modifiers re-rendered")
+            }
+        }
+        .font(.caption2.monospacedDigit().weight(.semibold))
     }
 }
 
@@ -403,6 +453,7 @@ private struct GroupRowView: View {
 private struct ComponentDetailView: View {
     let snapshot: DetailSnapshot
     let renders: RenderCounts.Entry?
+    let wrapperRenders: [Int: RenderCounts.Entry]
     let select: () -> Void
     let open: (ComponentList.Item) -> Void
 
@@ -454,6 +505,14 @@ private struct ComponentDetailView: View {
                             Text(wrapper.title).font(.footnote.weight(wrapper === node ? .semibold : .regular))
                                 .lineLimit(1).truncationMode(.middle)
                             Spacer(minLength: 8)
+                            if wrapper !== node, let entry = wrapperRenders[wrapper.id], entry.count > 0 {
+                                Text(entry.label)
+                                    .font(.caption2.monospacedDigit().weight(.semibold))
+                                    .padding(.horizontal, 5)
+                                    .background(Color(InspectorRenderer.heatColor(1)).opacity(0.2), in: Capsule())
+                                    .fixedSize()
+                                    .accessibilityLabel("\(entry.label) renders")
+                            }
                             Text(wrapper.frame.frameLabel).font(.caption2.monospacedDigit()).foregroundStyle(.secondary).fixedSize()
                         }
                     }

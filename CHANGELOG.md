@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.16
+
+- Re-renders: the screen stays readable under the heatmap. Only the innermost marked views are filled, at 4–12 %
+  opacity; the views that hold them are outlined only, so nested fills no longer stack up into a solid layer on a
+  deep screen. The heat is in the outline's colour and width and in the count label.
+- Dev → Components list is available before anything is captured. Opening it then captures the screen (highlighting
+  it in the current mode) and shows the capture's progress until the list is ready. If highlighting is turned off
+  while the list is open, the list says so and offers to capture again.
+- Picking the checked mode in the menu again turns highlighting off, as Off does.
+- Components list rows never grow wider than the sheet. A row shows the first two re-rendered modifiers, shortened
+  to fit, then "+N"; the name and frame lines stay in place. Each modifier's count is in the row's details, under
+  "Wrapped in".
+
 ## 0.2.15
 
 - Re-renders: a total is shared only by components that hold the same views, two or more. A component left alone
