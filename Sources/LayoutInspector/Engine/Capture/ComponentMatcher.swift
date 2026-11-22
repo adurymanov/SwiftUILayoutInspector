@@ -205,7 +205,16 @@ nonisolated struct ComponentMatcher {
                 }
             }
         }
-        return result
+        return Self.withoutLoneTotals(result)
+    }
+
+    /// A total is shared only by the components that hold the same views. A component alone with several views is one
+    /// of them, but the others are views the capture doesn't show (a hidden copy, a row out of sight): their total isn't
+    /// its count, so it gets none.
+    static func withoutLoneTotals(_ result: [Int: [Int]]) -> [Int: [Int]] {
+        var holders: [[Int]: Int] = [:]
+        for views in result.values where views.count > 1 { holders[views.sorted(), default: 0] += 1 }
+        return result.filter { $0.value.count == 1 || holders[$0.value.sorted()]! > 1 }
     }
 
     /// Candidates that are copies of another candidate, folded into the first of them: the representatives, and the
@@ -298,6 +307,20 @@ nonisolated struct ComponentMatcher {
             } else {
                 rest.append(member)
             }
+        }
+        // By text, the same way: the one view built with the component's texts, when no other waiting component's
+        // texts are in it.
+        let others = rivals + members
+        rest = rest.filter { member in
+            let texts = Set(input.components[member].texts)
+            guard !texts.isEmpty else { return true }
+            let hits = left.indices.filter { fits(member, left[$0]) && !strings(left[$0]).isDisjoint(with: texts) }
+            guard hits.count == 1 else { return true }
+            let view = left[hits[0]]
+            let found = strings(view)
+            guard !others.contains(where: { $0 != member && !found.isDisjoint(with: Set(input.components[$0].texts)) }) else { return true }
+            result.append((member, [left.remove(at: hits[0])]))
+            return false
         }
         if left.count > 1 { result += rest.map { ($0, left) } }
         return result

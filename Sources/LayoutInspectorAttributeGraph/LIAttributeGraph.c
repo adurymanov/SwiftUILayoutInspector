@@ -23,6 +23,8 @@ static GetU32Fn getFlags;
 static GetU32Fn getValue;
 static MakeChildIteratorFn makeChildIterator;
 static NextChildFn nextChild;
+typedef LIAGTreeElement (*NextChild2Fn)(LIChildIterator *, bool);
+static NextChild2Fn nextChild2;
 typedef const void *(*TypeDescriptionFn)(const void *);
 static TypeDescriptionFn typeDescription;
 
@@ -80,6 +82,7 @@ static void resolve(void) {
     getValue = (GetU32Fn)dlsym(h, "AGTreeElementGetValue");
     makeChildIterator = (MakeChildIteratorFn)dlsym(h, "AGTreeElementMakeChildIterator");
     nextChild = (NextChildFn)dlsym(h, "AGTreeElementGetNextChild");
+    nextChild2 = (NextChild2Fn)dlsym(h, "AGTreeElementGetNextChild2");
     typeDescription = (TypeDescriptionFn)dlsym(h, "AGTypeDescription");
     makeNodeIterator = (MakeNodeIteratorFn)dlsym(h, "AGTreeElementMakeNodeIterator");
     nextNode = (NextNodeFn)dlsym(h, "AGTreeElementGetNextNode");
@@ -249,6 +252,189 @@ int LIAGTreeElementGetNodes(LIAGTreeElement element, uint32_t *out, int max) {
         out[n++] = node;
     }
     return n;
+}
+
+// MARK: - Child walk
+
+#include <stdlib.h>
+#if __has_feature(ptrauth_calls)
+#include <ptrauth.h>
+#define LI_CODE(f) ((const uint32_t *)ptrauth_strip((void *)(f), ptrauth_key_function_pointer))
+#else
+#define LI_CODE(f) ((const uint32_t *)(void *)(f))
+#endif
+
+// The instructions of the functions the walk relies on, PC-relative parts (adrp and the add after it, bl, b) left
+// out, hashed (FNV-1a), read from AttributeGraph with lldb: AGTreeElementGetNextChild2, AGTreeElementGetValue,
+// AGSubgraphGetTreeRoot, AGTreeElementMakeNodeIterator, AGTreeElementGetNextNode, AGGraphGetIndirectAttribute, then
+// the two they call, AG::Subgraph::tree_subgraph_child and tree_node_at_index (read only once the callers matched).
+// Any other code gets no walk. On 26.5 tree_subgraph_child differs from 27.0 only in registers and in the helper that
+// resolves an indirect root value.
+enum { hashedFunctions = 8, directFunctions = 6 };
+static const uint64_t knownHashes[][hashedFunctions] = {
+    // iOS 27.0 simulator
+    {0x4d12230787c996a7ULL, 0x3596a9408f35b3c5ULL, 0x2adc5a68b6f4c707ULL, 0x652e5fd0336f2004ULL, 0x8c7fd533dd169a5bULL,
+     0x9a65809fc6a768c7ULL, 0x5cc89d869fbb8a88ULL, 0xe78dd368c24021f4ULL},
+    // iOS 26.5 simulator
+    {0x4d12230787c996a7ULL, 0x3596a9408f35b3c5ULL, 0x2adc5a68b6f4c707ULL, 0x652e5fd0336f2004ULL, 0x8c7fd533dd169a5bULL,
+     0x85be97c35e6fca65ULL, 0x8ab6470c02de79aeULL, 0xe78dd368c24021f4ULL},
+};
+static const int hashedWords[hashedFunctions] = {33, 6, 7, 2, 24, 10, 170, 50};
+// Where the callers call them: word 27 of AGTreeElementGetNextChild2, word 11 of AGTreeElementGetNextNode.
+static const int callSites[2][2] = {{0, 27}, {4, 11}};
+static uint64_t codeHashes[hashedFunctions];
+static int walkState; // 0 unchecked, 1 available, -1 not
+// AG::data::_shared_table_bytes: the base all tree elements and nodes are offsets from.
+static const uint8_t *const *sharedTable;
+
+static uint64_t maskedHash(const uint32_t *code, int words) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    bool afterAdrp = false;
+    for (int i = 0; i < words; i++) {
+        uint32_t w = code[i], m = w;
+        if ((w & 0x9F000000) == 0x90000000) m = 0x90000000;
+        else if ((w & 0xFC000000) == 0x94000000) m = 0x94000000;
+        else if ((w & 0xFC000000) == 0x14000000) m = 0x14000000;
+        else if (afterAdrp && (w & 0xFFC00000) == 0x91000000) m = w & 0xFFC003FF;
+        afterAdrp = (w & 0x9F000000) == 0x90000000;
+        h = (h ^ m) * 0x100000001b3ULL;
+    }
+    return h;
+}
+
+static const uint32_t *branchTarget(const uint32_t *at) {
+    uint32_t w = *at;
+    if ((w & 0xFC000000) != 0x94000000) return NULL;
+    int32_t imm = (int32_t)(w << 6) >> 6;
+    return at + imm;
+}
+
+/// `adrp xN, page; add xN, xN, #off` at `at`: the address they build.
+static const void *adrpAdd(const uint32_t *at) {
+    uint32_t adrp = at[0], add = at[1];
+    if ((adrp & 0x9F000000) != 0x90000000 || (add & 0xFFC00000) != 0x91000000) return NULL;
+    int64_t immhi = (int64_t)((int32_t)(adrp << 8) >> 13), immlo = (adrp >> 29) & 3;
+    uintptr_t page = ((uintptr_t)at & ~(uintptr_t)0xFFF) + (uintptr_t)(((immhi << 2) | immlo) << 12);
+    return (const void *)(page + ((add >> 10) & 0xFFF));
+}
+
+static bool walkIsAvailable(void) {
+    if (walkState != 0) return walkState > 0;
+    walkState = -1;
+    if (!LIAGIsAvailable() || !nextChild2 || !makeNodeIterator || !nextNode || !graphGetIndirectAttribute) return false;
+#if defined(__arm64__)
+    const uint32_t *code[hashedFunctions] = {LI_CODE(nextChild2), LI_CODE(getValue), LI_CODE(getTreeRoot),
+                                             LI_CODE(makeNodeIterator), LI_CODE(nextNode), LI_CODE(graphGetIndirectAttribute)};
+    for (int i = 0; i < directFunctions; i++) codeHashes[i] = maskedHash(code[i], hashedWords[i]);
+    size_t rows = sizeof(knownHashes) / sizeof(knownHashes[0]);
+    for (size_t k = 0; k < rows; k++) {
+        if (memcmp(knownHashes[k], codeHashes, sizeof(uint64_t) * directFunctions) != 0) continue;
+        for (int c = 0; c < 2; c++) {
+            const uint32_t *callee = branchTarget(code[callSites[c][0]] + callSites[c][1]);
+            if (!callee) return false;
+            code[directFunctions + c] = callee;
+            codeHashes[directFunctions + c] = maskedHash(callee, hashedWords[directFunctions + c]);
+        }
+        break;
+    }
+    for (size_t k = 0; k < rows; k++) {
+        if (memcmp(knownHashes[k], codeHashes, sizeof(codeHashes)) != 0) continue;
+        sharedTable = (const uint8_t *const *)adrpAdd(LI_CODE(getValue));
+        if (sharedTable) walkState = 1;
+        break;
+    }
+#endif
+    return walkState > 0;
+}
+
+bool LIAGChildWalkIsAvailable(void) { return walkIsAvailable(); }
+
+void LIAGChildWalkCodeHashes(uint64_t *out) {
+    walkIsAvailable();
+    memcpy(out, codeHashes, sizeof(codeHashes));
+}
+
+struct LIAGChildWalk {
+    const uint8_t *graph;
+    uint32_t *values;
+    size_t count;
+    int searched;
+};
+
+static int compareU32(const void *a, const void *b) {
+    uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
+    return x < y ? -1 : x > y;
+}
+
+LIAGChildWalk *LIAGChildWalkCreate(const void *subgraph) {
+    if (!walkIsAvailable()) return NULL;
+    // Offsets as tree_subgraph_child reads them: AGSubgraphRef + 0x10 is the AG::Subgraph, + 0x28 its graph, whose
+    // subgraphs are at + 0x128 (count at + 0x130); a subgraph's tree root is at + 0x60.
+    const uint8_t *own = *(const uint8_t *const *)((const uint8_t *)subgraph + 0x10);
+    if (!own) return NULL;
+    const uint8_t *graph = *(const uint8_t *const *)(own + 0x28);
+    if (!graph) return NULL;
+    const uint8_t *const *subgraphs = *(const uint8_t *const *const *)(graph + 0x128);
+    uint32_t total = *(const uint32_t *)(graph + 0x130);
+    if (!subgraphs && total) return NULL;
+    LIAGChildWalk *walk = calloc(1, sizeof(LIAGChildWalk));
+    if (!walk) return NULL;
+    walk->graph = graph;
+    walk->values = malloc(sizeof(uint32_t) * (total ? total : 1));
+    if (!walk->values) { free(walk); return NULL; }
+    // The subgraphs AttributeGraph checks (not invalidated: byte + 0x68), indirect values followed to their source
+    // as it resolves them: an element that owns none of these values can't have a subgraph hung under it.
+    for (uint32_t i = 0; i < total; i++) {
+        const uint8_t *s = subgraphs[i];
+        if (!s || s[0x68] != 0) continue;
+        uint32_t root = *(const uint32_t *)(s + 0x60);
+        if (root == 0) continue;
+        uint32_t value = getValue((LIAGTreeElement)(uintptr_t)root);
+        for (int hop = 0; hop < 64 && (value & 3) == 1; hop++) value = graphGetIndirectAttribute(value);
+        if (value < 4 || (value & 3) != 0) continue;
+        walk->values[walk->count++] = value;
+    }
+    qsort(walk->values, walk->count, sizeof(uint32_t), compareU32);
+    return walk;
+}
+
+/// AttributeGraph would find a subgraph hung under `element`: it owns a node some subgraph's root holds, or it is in
+/// another graph than the one the values were read from.
+static bool mayHaveSubgraphs(LIAGChildWalk *walk, LIAGTreeElement element) {
+    uint32_t e = (uint32_t)(uintptr_t)element;
+    const uint8_t *page = *sharedTable + (e & 0xFFFFFE00);
+    const uint8_t *owner = *(const uint8_t *const *)page;
+    if (!owner || *(const uint8_t *const *)(owner + 0x28) != walk->graph) return true;
+    if (walk->count == 0) return false;
+    LINodeIterator it = makeNodeIterator(element);
+    for (int i = 0; i < 100000; i++) {
+        uint32_t node = nextNode(&it);
+        if (node == 2 || node == 0) return false;
+        if (bsearch(&node, walk->values, walk->count, sizeof(uint32_t), compareU32)) return true;
+    }
+    return true;
+}
+
+int LIAGChildWalkGetChildren(LIAGChildWalk *walk, LIAGTreeElement element, LIAGTreeElement *out, int max) {
+    bool search = mayHaveSubgraphs(walk, element);
+    if (search) walk->searched++;
+    LIChildIterator it;
+    memset(&it, 0, sizeof(it));
+    it = makeChildIterator(element);
+    int n = 0;
+    LIAGTreeElement child;
+    while (n < max && (child = nextChild2(&it, search)) != NULL) out[n++] = child;
+    return n;
+}
+
+void LIAGChildWalkGetStats(LIAGChildWalk *walk, int *searched, int *roots) {
+    *searched = walk->searched;
+    *roots = (int)walk->count;
+}
+
+void LIAGChildWalkDestroy(LIAGChildWalk *walk) {
+    free(walk->values);
+    free(walk);
 }
 
 // MARK: - Xcode previews

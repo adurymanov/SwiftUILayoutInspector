@@ -58,12 +58,13 @@ enum AttributeGraphTree {
 
     static func tree(of host: UIView) -> Element? {
         guard isAvailable, let subgraph = rootSubgraph(of: host), let root = LIAGSubgraphGetTreeRoot(subgraph) else { return nil }
-        return element(root, depth: 0)
+        let reader = ChildReader(subgraph: subgraph)
+        return element(root, depth: 0, reader: reader)
     }
 
     private static var buffer = [LIAGTreeElement?](repeating: nil, count: 1024)
 
-    private static func element(_ e: LIAGTreeElement, depth: Int) -> Element {
+    private static func element(_ e: LIAGTreeElement, depth: Int, reader: ChildReader) -> Element {
         var name = "?"
         let meta = LIAGTreeElementGetType(e)
         if let meta {
@@ -71,10 +72,10 @@ enum AttributeGraphTree {
         }
         var children: [Element] = []
         if depth < 400 {
-            let n = Int(buffer.withUnsafeMutableBufferPointer { LIAGTreeElementGetChildren(e, $0.baseAddress!, Int32($0.count)) })
+            let n = Int(buffer.withUnsafeMutableBufferPointer { reader.children(of: e, into: $0) })
             let elements = buffer[0..<n].compactMap { $0 }   // copy before recursing (the buffer is shared)
             children.reserveCapacity(elements.count)
-            for c in elements { children.append(element(c, depth: depth + 1)) }
+            for c in elements { children.append(element(c, depth: depth + 1, reader: reader)) }
         }
         return Element(typeName: name, typeID: meta, flags: LIAGTreeElementGetFlags(e), children: children)
     }
@@ -108,6 +109,67 @@ enum AttributeGraphTree {
     /// "SwiftUI.ModifiedContent<InspectorDemo.ProfileHeader, …>" -> "ModifiedContent<ProfileHeader, …>"
     static func readable(_ full: String) -> String {
         full.replacingOccurrences(of: #"\b[A-Za-z_][A-Za-z0-9_]*\.(?=[A-Za-z_(])"#, with: "", options: .regularExpression)
+    }
+}
+
+
+/// Reads the children of the tree elements of one host's graph: with ``LIAGChildWalk`` where the code it was written
+/// against is there (the iOS 26.5 and 27.0 simulators), which asks AttributeGraph about hung subgraphs only for the
+/// elements that own a subgraph root's value, else every element the plain way. `LAYOUT_INSPECTOR_FULL_WALK` turns the walk off.
+final class ChildReader {
+    private let walk: OpaquePointer?
+
+    init(subgraph: UnsafeRawPointer, plain: Bool = ChildReader.isOff) {
+        walk = plain ? nil : LIAGChildWalkCreate(subgraph)
+    }
+
+    deinit { if let walk { LIAGChildWalkDestroy(walk) } }
+
+    static let isOff = ProcessInfo.processInfo.environment["LAYOUT_INSPECTOR_FULL_WALK"] != nil
+
+    /// The AttributeGraph in this process is one the walk knows.
+    static var isAvailable: Bool { LIAGChildWalkIsAvailable() }
+
+    var isWalking: Bool { walk != nil }
+
+    func children(of element: LIAGTreeElement, into buffer: UnsafeMutableBufferPointer<LIAGTreeElement?>) -> Int32 {
+        if let walk { return LIAGChildWalkGetChildren(walk, element, buffer.baseAddress!, Int32(buffer.count)) }
+        return LIAGTreeElementGetChildren(element, buffer.baseAddress!, Int32(buffer.count))
+    }
+
+    /// Elements asked about hung subgraphs, and the subgraph roots known.
+    var stats: (searched: Int, roots: Int) {
+        guard let walk else { return (0, 0) }
+        var searched: Int32 = 0, roots: Int32 = 0
+        LIAGChildWalkGetStats(walk, &searched, &roots)
+        return (Int(searched), Int(roots))
+    }
+
+    /// The code hashes of the functions the walk checks, for adding an iOS version.
+    static var codeHashes: [UInt64] {
+        var out = [UInt64](repeating: 0, count: 8)
+        out.withUnsafeMutableBufferPointer { LIAGChildWalkCodeHashes($0.baseAddress!) }
+        return out
+    }
+
+    /// Walks the whole tree of `host` both ways and compares the children of every element (tests and
+    /// `LAYOUT_INSPECTOR_CHECK_WALK`): the elements seen, and the ones whose children differ. `nil` without a walk.
+    static func check(_ host: UIView) -> (elements: Int, mismatches: Int, searched: Int, roots: Int)? {
+        guard let subgraph = AttributeGraphTree.rootSubgraph(of: host), let root = LIAGSubgraphGetTreeRoot(subgraph) else { return nil }
+        let fast = ChildReader(subgraph: subgraph, plain: false)
+        guard fast.isWalking else { return nil }
+        let full = ChildReader(subgraph: subgraph, plain: true)
+        var a = [LIAGTreeElement?](repeating: nil, count: 4096), b = a
+        var stack = [root], elements = 0, mismatches = 0
+        while let element = stack.popLast(), elements < 2_000_000 {
+            elements += 1
+            let n = Int(a.withUnsafeMutableBufferPointer { full.children(of: element, into: $0) })
+            let m = Int(b.withUnsafeMutableBufferPointer { fast.children(of: element, into: $0) })
+            if n != m || !zip(a[0..<n], b[0..<m]).allSatisfy({ $0 == $1 }) { mismatches += 1 }
+            stack += a[0..<n].compactMap { $0 }
+        }
+        let stats = fast.stats
+        return (elements, mismatches, stats.searched, stats.roots)
     }
 }
 

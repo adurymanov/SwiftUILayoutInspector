@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.15
+
+- Re-renders: a total is shared only by components that hold the same views, two or more. A component left alone
+  with several views of its type (the others are a hidden copy or rows the capture doesn't show) gets no count
+  instead of "Σ0 shared by 1 view", in the panel, the components list and `capture.json`. Away from the nearest
+  component, with other components of the type waiting, the texts now decide too: the one view built with the
+  component's texts, when no other waiting component's texts are in it (a list row's price label gets the row's view,
+  not a card's elsewhere). On a big app's home the shared share was 2–11 % between launches (all of it groups of
+  one) and is 0 now; the bundled recordings are 0–2 %, and a recording of that home is added
+  (`Fixtures/Match/big-app-grid.json`).
+- Reading AttributeGraph trees asks for the subgraphs hung under an element only where one can hang. AttributeGraph
+  hangs a subgraph's tree under the element that owns the node its root holds as value, and checks every subgraph
+  of the graph for every element it lists. The walk now takes the values of all subgraph roots once and asks only
+  the elements that own one of them (4–5 % of a big screen's elements); the others list their own children. It
+  runs only where the code of the AttributeGraph functions involved is the code it was written against (iOS 26.5 and
+  27 simulators, checked by a hash of their instructions) and reads trees as before elsewhere.
+  `LAYOUT_INSPECTOR_FULL_WALK` turns it off, `LAYOUT_INSPECTOR_CHECK_WALK` logs a comparison of both walks for every
+  host after each capture. On a big app's home the biggest host's tree took 155–197 ms and takes 32–34 ms, and
+  Re-renders' `forest` went from 172–214 ms to 32–37 ms (longest step of a mapping 148–191 → 98–99 ms on the first
+  map after launch, 27–28 ms after). The walk gives every element the same children as before on every demo screen,
+  after scrolling lazy lists, under a pushed screen and with a sheet up, and on that home (25 230 elements).
+- Plain captures read SwiftUI's view debug data, parse it, place the components and build the tree in separate
+  steps, and the tree is built in slices: the build was one step of 200+ ms on a big app's screen. The longest
+  step is now SwiftUI's own `_viewDebugData()` call (about 130 ms there), which can't be split. With
+  `LAYOUT_INSPECTOR_LOG` the capture line also names what the longest step spent its time on.
+
 ## 0.2.14
 
 - Re-renders matches components to graph views off the main thread. The matcher is pure and runs on a background

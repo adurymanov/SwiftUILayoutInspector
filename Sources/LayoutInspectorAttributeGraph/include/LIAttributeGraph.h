@@ -26,6 +26,25 @@ const void * _Nullable LIAGTypeDescription(const void * _Nonnull type);
 /// Writes up to `max` children into `out`, returns the number of children written.
 int LIAGTreeElementGetChildren(LIAGTreeElement _Nonnull element, LIAGTreeElement _Nullable * _Nonnull out, int max);
 
+/// A walk over the trees of one graph that gives the same children as ``LIAGTreeElementGetChildren`` without asking
+/// AttributeGraph for the subgraphs hung under an element that has none.
+///
+/// AttributeGraph hangs a subgraph's tree under the element that owns the node its tree root holds as value: for every
+/// element, `AGTreeElementGetNextChild` checks every subgraph of the graph (`AG::Subgraph::tree_subgraph_child`),
+/// which is most of a big screen's walk. The walk takes the values of all subgraphs' roots once and asks only
+/// elements that own one of them (`AGTreeElementGetNextChild2(it, false)` for the rest). Only where the code of those
+/// functions is the code this was written against (the iOS 26.5 and 27.0 simulators, checked by a hash of the
+/// instructions): NULL otherwise, and then the plain children are read.
+typedef struct LIAGChildWalk LIAGChildWalk;
+bool LIAGChildWalkIsAvailable(void);
+LIAGChildWalk * _Nullable LIAGChildWalkCreate(const void * _Nonnull subgraph);
+int LIAGChildWalkGetChildren(LIAGChildWalk * _Nonnull walk, LIAGTreeElement _Nonnull element, LIAGTreeElement _Nullable * _Nonnull out, int max);
+/// Elements the walk asked about subgraphs, and the subgraph roots it knew of (diagnostics).
+void LIAGChildWalkGetStats(LIAGChildWalk * _Nonnull walk, int * _Nonnull searched, int * _Nonnull roots);
+void LIAGChildWalkDestroy(LIAGChildWalk * _Nonnull walk);
+/// The 8 hashes the code check computed, `0` for a function it didn't get to (diagnostics: to add an iOS version).
+void LIAGChildWalkCodeHashes(uint64_t * _Nonnull out);
+
 /// Profiling of attribute updates, for counting `body` evaluations. `false` when a symbol is missing.
 bool LIAGProfilingIsAvailable(void);
 const void * _Nullable LIAGSubgraphGetGraph(const void * _Nonnull subgraph);

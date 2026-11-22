@@ -330,13 +330,13 @@ enum ComponentGraph {
     static func tree(of host: UIView) -> (views: [GraphView], names: [String]) {
         guard RenderProfiler.isAvailable, let subgraph = AttributeGraphTree.rootSubgraph(of: host),
               let root = LIAGSubgraphGetTreeRoot(subgraph) else { return ([], []) }
-        return tree(root, host: host)
+        return tree(root, host: host, reader: ChildReader(subgraph: subgraph))
     }
 
     /// Whether each type is an app type, by its metadata: asked for every element of every tree.
     private static var appTypes: [UnsafeRawPointer: (name: String, isApp: Bool)] = [:]
 
-    private static func tree(_ root: LIAGTreeElement, host: UIView) -> (views: [GraphView], names: [String]) {
+    private static func tree(_ root: LIAGTreeElement, host: UIView, reader: ChildReader) -> (views: [GraphView], names: [String]) {
         var views: [GraphView] = []
         var names: [String] = []
         var byNode: [UInt32: Int] = [:]
@@ -371,7 +371,7 @@ enum ComponentGraph {
                 }
             }
             guard depth < 400 else { return }
-            let n = Int(children.withUnsafeMutableBufferPointer { LIAGTreeElementGetChildren(element, $0.baseAddress!, Int32($0.count)) })
+            let n = Int(children.withUnsafeMutableBufferPointer { reader.children(of: element, into: $0) })
             // Copied before recursing: the buffer is shared.
             for child in Array(children[0..<n]).reversed() {
                 guard let child else { continue }

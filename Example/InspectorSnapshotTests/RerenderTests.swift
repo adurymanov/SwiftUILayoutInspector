@@ -357,6 +357,66 @@ final class RerenderTests: XCTestCase {
         LayoutCapture.visibleHostingViews(in: window, excluding: [])
     }
 
+    /// The child walk that asks AttributeGraph about hung subgraphs only where one can hang (``ChildReader``) gives
+    /// every element the children the plain walk gives: on every demo screen (lazy stacks and grids, ForEach, a Form,
+    /// hosted UIKit), after lazy rows scrolled in and out, under a pushed screen and with a sheet up. Skipping the
+    /// search where it is needed loses the rows of a lazy list, which this sees as elements whose children differ.
+    func test_childWalk_givesThePlainWalksChildren() async throws {
+        guard #available(iOS 26, *) else { throw XCTSkip("no AttributeGraph tree walk on iOS 18") }
+        print("WalkCheck code \(ChildReader.codeHashes.map { String($0, radix: 16) })")
+        // Known: the iOS 26.5 and 27.0 simulators, which the release is tested on. Elsewhere trees are read the plain way.
+        guard ChildReader.isAvailable else { throw XCTSkip("the child walk doesn't know this AttributeGraph") }
+        func check(_ window: UIWindow, _ label: String) {
+            let hosts = LayoutCapture.visibleHostingViews(in: window, excluding: [])
+            XCTAssertFalse(hosts.isEmpty, label)
+            for host in hosts {
+                guard let result = ChildReader.check(host) else {
+                    // Only a host without a tree (a UIKit bar item) may have no walk.
+                    XCTAssertNil(AttributeGraphTree.tree(of: host), "\(label): no walk for \(type(of: host))")
+                    continue
+                }
+                print("WalkCheck \(label) \(type(of: host)): \(result.elements) elements, \(result.mismatches) differ, "
+                      + "\(result.searched) searched, \(result.roots) roots")
+                XCTAssertGreaterThan(result.elements, 1, label)
+                XCTAssertEqual(result.mismatches, 0, "\(label): \(type(of: host))")
+            }
+        }
+        for screen in DemoScreen.allCases {
+            let harness = ScreenHarness(screen.view)
+            defer { harness.tearDown() }
+            // Some screens animate for ever: the walk is checked on whatever is there by then.
+            _ = try? await LayoutInspector.captureWhenStable(harness.window, timeout: .seconds(8))
+            check(harness.window, screen.title)
+            // Lazy rows built while scrolling, and the first ones left behind.
+            if let scroll = Self.scrollViews(in: harness.window).max(by: { $0.contentSize.height < $1.contentSize.height }),
+               scroll.contentSize.height > scroll.bounds.height * 1.5 {
+                scroll.setContentOffset(CGPoint(x: 0, y: scroll.contentSize.height - scroll.bounds.height), animated: false)
+                try await Task.sleep(for: .milliseconds(400))
+                check(harness.window, screen.title + " scrolled")
+                scroll.setContentOffset(.zero, animated: false)
+                try await Task.sleep(for: .milliseconds(400))
+                check(harness.window, screen.title + " back")
+            }
+        }
+        let presenter = SheetPresenter()
+        let harness = ScreenHarness(WalkProbe(presenter: presenter))
+        defer { harness.tearDown() }
+        try await harness.waitUntilLoaded(timeout: .seconds(20))
+        presenter.isPushed = true
+        try await Task.sleep(for: .milliseconds(1200))
+        check(harness.window, "pushed")
+        presenter.isPresented = true
+        try await Task.sleep(for: .milliseconds(1500))
+        check(harness.window, "sheet")
+        presenter.isPresented = false
+        try await Task.sleep(for: .milliseconds(1200))
+        check(harness.window, "sheet dismissed")
+    }
+
+    private static func scrollViews(in view: UIView) -> [UIScrollView] {
+        ((view as? UIScrollView).map { [$0] } ?? []) + view.subviews.flatMap { scrollViews(in: $0) }
+    }
+
     private func waitUntil(timeout: Duration = .seconds(10), file: StaticString = #filePath, line: UInt = #line,
                            _ condition: () -> Bool) async throws {
         let deadline = ContinuousClock.now + timeout
@@ -372,6 +432,18 @@ final class RerenderTests: XCTestCase {
 
 private final class SheetPresenter: ObservableObject {
     @Published var isPresented = false
+    @Published var isPushed = false
+}
+
+/// A list screen with another list pushed over it and a third in a sheet.
+private struct WalkProbe: View {
+    @ObservedObject var presenter: SheetPresenter
+
+    var body: some View {
+        LabelsScreen()
+            .navigationDestination(isPresented: $presenter.isPushed) { FeedScreen() }
+            .sheet(isPresented: $presenter.isPresented) { NavigationStack { MarketsScreen() } }
+    }
 }
 
 private struct SheetHost: View {

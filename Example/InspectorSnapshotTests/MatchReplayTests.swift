@@ -13,8 +13,9 @@ final class MatchReplayTests: XCTestCase {
     /// The share of components with a count that may share it, by recording.
     private static let limits: [String: Double] = [
         "markets-demo.json": 0.05,
-        "big-app-portfolio.json": 0.20,
-        "big-app-home.json": 0.20,
+        "big-app-portfolio.json": 0.05,
+        "big-app-home.json": 0.05,
+        "big-app-grid.json": 0.05,
     ]
 
     private static var fixtures: [URL] {
@@ -45,8 +46,10 @@ final class MatchReplayTests: XCTestCase {
         }
     }
 
-    /// The matcher made faster in 0.2.14 ties every bundled recording as 0.2.13 did (`Fixtures/MatchExpected`, written
-    /// by the 0.2.13 matcher): component index → view indices.
+    /// The matcher ties every bundled recording as it did when `Fixtures/MatchExpected` was written (component index →
+    /// view indices). Written by the 0.2.15 matcher; against 0.2.14 it ties more components by their texts away from
+    /// the nearest component (a list row's price is the one view built with that price, not a card's elsewhere), and a
+    /// component left alone with several views gets none.
     func test_bundledRecordings_matchAsBefore() throws {
         let expected = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/MatchExpected")
         for url in Self.fixtures where url.deletingLastPathComponent().lastPathComponent == "Match" {
@@ -56,6 +59,29 @@ final class MatchReplayTests: XCTestCase {
             let now = Dictionary(uniqueKeysWithValues: ComponentMatcher(input).run().map { (String($0.key), $0.value) })
             XCTAssertEqual(now, before, url.lastPathComponent)
         }
+    }
+
+    /// A total is shared by the components that can't be told apart, two or more: a component alone with several views
+    /// gets no count (0.2.14 filled the panel with lines like "Σ0 shared by 1 view" on a big app's home).
+    func test_recordings_shareOnlyBetweenComponents() throws {
+        for url in Self.fixtures {
+            let input = try JSONDecoder().decode(Recording.self, from: Data(contentsOf: url)).input
+            var holders: [[Int]: Int] = [:]
+            for views in ComponentMatcher(input).run().values where views.count > 1 { holders[views.sorted(), default: 0] += 1 }
+            XCTAssertEqual(holders.values.filter { $0 < 2 }.count, 0, url.lastPathComponent)
+        }
+        let box = [0.0, 0, 100, 20]
+        let views = [MatchInput.View(type: "Row", host: 0, frame: [0, 0, 100, 40], bounds: [0, 0, 100, 40]),
+                     MatchInput.View(type: "Label", parent: 0, host: 0, bounds: [0, 0, 50, 20]),
+                     MatchInput.View(type: "Label", parent: 0, host: 0, bounds: [50, 0, 50, 20])]
+        let one = MatchInput(views: views, components: [
+            .init(id: 1, type: "Row", host: 0, box: [0, 0, 100, 40], texts: []),
+            .init(id: 2, type: "Label", parent: 0, host: 0, box: box, texts: []),
+        ])
+        XCTAssertEqual(ComponentMatcher(one).run(), [0: [0]], "a label alone with two views")
+        var two = one
+        two.components.append(.init(id: 3, type: "Label", parent: 0, host: 0, box: box, texts: []))
+        XCTAssertEqual(ComponentMatcher(two).run(), [0: [0], 1: [1, 2], 2: [1, 2]], "two labels that can't be told apart")
     }
 
     /// The matcher off the main thread asks about the strings it needs and is run again until it asked about none

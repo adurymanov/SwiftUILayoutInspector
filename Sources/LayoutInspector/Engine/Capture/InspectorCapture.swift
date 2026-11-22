@@ -1,4 +1,5 @@
 #if LayoutInspectorEngine && !LAYOUT_INSPECTOR_DISABLED && os(iOS)
+import SwiftUI
 import UIKit
 
 /// One capture of a view hierarchy: a SwiftUI tree per hosting view and the UIKit render tree.
@@ -195,9 +196,11 @@ enum LayoutCapture {
 
     /// The `_ViewDebug` trees of one hosting view between the steps that read, encode and build them.
     private final class HostTrees {
+        var data: [_ViewDebug.Data]?
         var roots: [RawDebugNode]?
         var pending: [RawDebugNode] = []
         var prepared = 0
+        var builder: SwiftUITreeBuilder?
     }
 
     private final class Output {
@@ -209,6 +212,8 @@ enum LayoutCapture {
         var timings: [String: Double] = [:]
         var busy: Double = 0
         var longest: Double = 0
+        // What the longest step spent its time on, by `measure` key: for the log.
+        var longestParts: [String: Double] = [:]
         func measure<T>(_ key: String, _ body: () -> T) -> T {
             let t = CACurrentMediaTime()
             defer { timings[key, default: 0] += CACurrentMediaTime() - t }
@@ -217,10 +222,16 @@ enum LayoutCapture {
         var steps: [Step] = []
         func add(_ weight: Double, fraction: (() -> Double)? = nil, splittable body: @escaping (CFTimeInterval) -> Bool) {
             steps.append(Step(weight: weight, run: { deadline in
+                let before = timings
                 let t = CACurrentMediaTime()
                 let done = body(deadline)
-                busy += CACurrentMediaTime() - t
-                longest = max(longest, CACurrentMediaTime() - t)
+                let spent = CACurrentMediaTime() - t
+                busy += spent
+                if spent > longest {
+                    longest = spent
+                    longestParts = [:]
+                    for (key, value) in timings where value > (before[key] ?? 0) { longestParts[key] = value - (before[key] ?? 0) }
+                }
                 return done
             }, fraction: fraction))
         }
@@ -306,19 +317,28 @@ enum LayoutCapture {
             let hadWindow = window != nil
             let isOnScreen = { !hadWindow || (window != nil && host.window === window) }
             let hostKey = "viewDebugData[\(TypeNames.shortClassName(host))]"
-            // Read: cheap, the data is SwiftUI's own record of the graph.
-            add(0.3) {
+            // Read: SwiftUI's own record of the graph, one call (over 100 ms on a big app's screen); its tree is read
+            // from it in the next step.
+            add(0.2) {
                 guard isOnScreen() else { return }
                 let ran = SwiftUIGraphReader.inUpdate(of: host) { readDebugData in
-                    let data = measure(hostKey) { readDebugData() }
+                    trees.data = measure(hostKey) { readDebugData() }
+                }
+                if !ran, host is ViewDebugDataProviding {
+                    ComponentReconstruction.log.append("\(TypeNames.shortClassName(host)): SwiftUI did not run the update, SwiftUI tree skipped")
+                }
+            }
+            add(0.1) {
+                let data = trees.data
+                trees.data = nil
+                guard let data, isOnScreen() else { return }
+                func read() {
                     guard let raw = measure("rawTree", { ViewDebugReader.trees(data, host: host) }) else { return }
                     raw.forEach(SwiftUIGraphReader.pruneHidden)
                     trees.roots = raw
                     trees.pending = measure("rawTree") { SwiftUITreeBuilder.nodesReadingValues(in: raw) }
                 }
-                if !ran, host is ViewDebugDataProviding {
-                    ComponentReconstruction.log.append("\(TypeNames.shortClassName(host)): SwiftUI did not run the update, SwiftUI tree skipped")
-                }
+                if !SwiftUIGraphReader.inUpdate(of: host, { _ in read() }) { read() }
             }
             // Encode the values the tree is built from: the expensive part (SwiftUI reflects them), split by node.
             add(3, fraction: { trees.pending.isEmpty ? 1 : Double(trees.prepared) / Double(trees.pending.count) }) { deadline in
@@ -334,18 +354,30 @@ enum LayoutCapture {
                 // No update, no progress: leave the values to the build, which encodes what it reads.
                 return !ran || trees.prepared >= trees.pending.count
             }
-            add(0.7) {
-                guard let rawRoots = trees.roots, isOnScreen() else { return }
+            add(0.2) {
+                guard let rawRoots = trees.roots, isOnScreen(), let reconstruction else { return }
+                measure("reconstructApply") { reconstruction.apply(to: rawRoots) }
+            }
+            add(0.5) { deadline in
+                guard let rawRoots = trees.roots, isOnScreen() else { return true }
+                var tree: InspectorNode?
                 func build() {
-                    if let reconstruction { measure("reconstructApply") { reconstruction.apply(to: rawRoots) } }
-                    if !rawRoots.isEmpty { graphAvailable = true }
-                    let tree = measure("semanticTree") { SwiftUITreeBuilder(host: host, nextID: nextID).build(roots: rawRoots) }
-                    let kept = tree.children.isEmpty ? nil : tree
-                    if let kept { roots.append(kept) }
-                    newCache[id] = CacheEntry(host: host, signature: signatures[id] ?? 0, tree: kept, attributeGraph: freshAG[id])
+                    measure("semanticTree") {
+                        if trees.builder == nil {
+                            trees.builder = SwiftUITreeBuilder(host: host, nextID: nextID)
+                            trees.builder?.begin(roots: rawRoots)
+                        }
+                        tree = trees.builder?.step(until: deadline)
+                    }
                 }
-                // The data is already read: without an update the tree is still built, from the copied values.
                 if !SwiftUIGraphReader.inUpdate(of: host, { _ in build() }) { build() }
+                guard let tree else { return false }
+                trees.builder = nil
+                if !rawRoots.isEmpty { graphAvailable = true }
+                let kept = tree.children.isEmpty ? nil : tree
+                if let kept { roots.append(kept) }
+                newCache[id] = CacheEntry(host: host, signature: signatures[id] ?? 0, tree: kept, attributeGraph: freshAG[id])
+                return true
             }
         }
 
@@ -362,6 +394,9 @@ enum LayoutCapture {
             _ = measure("modifierTypes") { ModifierTypes.wait(upTo: 0.05) }
             capture.modifierTypes = ModifierTypes.modifiers(among: (reconstruction ?? lastReconstruction?.index)?.appTypeNames ?? [])
             output.capture = capture
+            // The last step's parts aren't known yet: none when it is the longest.
+            let parts = longest < CACurrentMediaTime() - finalStart ? "" : longestParts.filter { $0.value >= 0.001 }
+                .sorted { $0.value > $1.value }.map { "\($0.key) \(Int($0.value * 1000))" }.joined(separator: " + ")
             lastTimings = ["total \(Int(duration * 1000)) ms"]
                 + timings.sorted { $0.value > $1.value }.map { "\($0.key) \(Int($0.value * 1000)) ms" }
                 + ViewDebugReader.encodingSummary
@@ -369,6 +404,7 @@ enum LayoutCapture {
                 + (timings["reconstructApply"] == nil ? [] : ComponentReconstruction.applySpent.sorted { $0.value > $1.value }.map { "apply.\($0.0) \(Int($0.1 * 1000)) ms" })
                 + ["hosts \(hosts.count), re-captured \(fresh.count)",
                    "longest step \(Int(max(longest, CACurrentMediaTime() - finalStart) * 1000)) ms"]
+                + (parts.isEmpty ? [] : ["longest step parts: " + parts])
         }
         return steps
     }

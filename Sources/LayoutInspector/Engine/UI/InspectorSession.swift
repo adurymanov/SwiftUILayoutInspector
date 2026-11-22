@@ -408,6 +408,16 @@ final class InspectorSession: ObservableObject {
         if ProcessInfo.processInfo.environment["LAYOUT_INSPECTOR_LOG"] != nil {
             NSLog("%@", "LayoutInspector capture: " + LayoutCapture.lastTimings.joined(separator: ", "))
         }
+        if ProcessInfo.processInfo.environment["LAYOUT_INSPECTOR_CHECK_WALK"] != nil {
+            for host in LayoutCapture.visibleHostingViews(in: target, excluding: excluded) {
+                let start = CACurrentMediaTime()
+                let result = ChildReader.check(host)
+                NSLog("%@", "LayoutInspector walk: \(TypeNames.shortClassName(host)) "
+                      + (result.map { "\($0.elements) elements, \($0.mismatches) differ, \($0.searched) searched, \($0.roots) roots" }
+                         ?? "no walk, code \(ChildReader.codeHashes.map { String($0, radix: 16) })")
+                      + ", \(Int((CACurrentMediaTime() - start) * 1000)) ms")
+            }
+        }
         CaptureDump.writeIfRequested(capture)
         let barTop = Self.bottomBarTop(in: capture, bounds: space.bounds)
         if barTop != bottomBarTop { bottomBarTop = barTop }

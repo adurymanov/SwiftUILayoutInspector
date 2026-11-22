@@ -243,16 +243,35 @@ final class SwiftUITreeBuilder {
     }
 
     func build(roots: [RawDebugNode]) -> InspectorNode {
+        begin(roots: roots)
+        return step(until: .infinity)!
+    }
+
+    private var hostNode: InspectorNode?
+    /// Nodes left to visit, the next one last: the walk is depth first, in the order of the tree.
+    private var pending: [(RawDebugNode, Context)] = []
+
+    /// Starts building in steps (``step(until:)``): a big screen's tree takes a few hundred milliseconds.
+    func begin(roots: [RawDebugNode]) {
         let hostNode = InspectorNode(
             id: nextID(), kind: .host,
             title: TypeNames.shortClassName(host),
             typeName: TypeNames.name(of: type(of: host)),
             anchor: NodeAnchor(view: host, rect: host.bounds)
         )
-        for root in roots {
-            visit(root, Context(space: host, rect: host.bounds, parent: hostNode))
-        }
+        self.hostNode = hostNode
+        pending = roots.reversed().map { ($0, Context(space: host, rect: host.bounds, parent: hostNode)) }
+    }
+
+    /// Visits nodes until `deadline` (at least one); the host's node once all are.
+    func step(until deadline: CFTimeInterval) -> InspectorNode? {
+        repeat {
+            guard let (raw, ctx) = pending.popLast() else { break }
+            visit(raw, ctx)
+        } while CACurrentMediaTime() < deadline
+        guard pending.isEmpty, let hostNode else { return nil }
         sortChildren(hostNode)
+        self.hostNode = nil
         return hostNode
     }
 
@@ -328,10 +347,10 @@ final class SwiftUITreeBuilder {
             if !descend { return }
         }
 
-        for child in raw.children {
+        for child in raw.children.reversed() {
             var c = childCtx
             if raw.children.count > 1 { c.decorations = [] }
-            visit(child, c)
+            pending.append((child, c))
         }
     }
 
