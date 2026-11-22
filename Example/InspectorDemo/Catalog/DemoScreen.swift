@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
-    case profile, feed, checkout, dashboard, promo, glass, spaces, heavy, rerenders, deep, labels
+    case profile, feed, checkout, dashboard, promo, glass, spaces, heavy, rerenders, deep, labels, markets
 
     var id: String { rawValue }
 
@@ -18,6 +18,7 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .rerenders: "Re-renders"
         case .deep: "Deep chain"
         case .labels: "Many labels"
+        case .markets: "Markets"
         }
     }
 
@@ -34,6 +35,7 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .rerenders: "@Observable model: only the readers of a changed property update"
         case .deep: "20+ same-size wrappers with long names, zero-size views, many rows"
         case .labels: "One text component 200+ times: lazy rows off screen, nested, a hidden copy"
+        case .markets: "Generic streaming wrappers, TimelineView, empty overlays, hosted tab items"
         }
     }
 
@@ -50,6 +52,7 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .rerenders: "flame"
         case .deep: "list.bullet.indent"
         case .labels: "textformat"
+        case .markets: "chart.line.uptrend.xyaxis"
         }
     }
 
@@ -71,6 +74,7 @@ enum DemoScreen: String, CaseIterable, Identifiable, Hashable {
         case .rerenders: RerenderScreen()
         case .deep: DeepChainScreen()
         case .labels: LabelsScreen()
+        case .markets: MarketsScreen()
         }
     }
 }

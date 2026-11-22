@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.12
+
+- Re-renders finds each view from the outside in: inside the view of the nearest component around it that was
+  already told apart, then further out (AttributeGraph doesn't nest every view the way the capture does), in the
+  component's own host first. Away from the nearest component a view is told apart only while no other component
+  of its type waits in the same scope. The insides of cards that are geometry groups (SwiftUI records
+  the same box in every card), views whose `body` draws nothing, generic wrappers around a `TimelineView` and tab
+  items in hosting controllers of their own now get counts of their own. A view whose produced boxes don't cover
+  the component's box is never paired with it, so a component the capture named after a view elsewhere gets no
+  count instead of a wrong one. Demo trading home: 71 of 118 components shared a count; now 1 of 118 (the tests
+  require under 5 %).
+- Reading the counts no longer describes the whole graph every second: the `body` nodes are classified once per
+  capture and then read through a description of only those nodes. Demo Heavy screen: 30 ms a read, now about 1 ms.
+- `ViewModifier` bodies are counted: an `Animatable` modifier with a repeating animation (a shimmer) shows its
+  count on the view it is applied to and on that view's row in the components list.
+- The panel, the components list and `capture.json` show one tally of shared counts: "N of M views share a
+  count" and each group once, `Σ` with the components on screen and the views in the graph. `capture.json`
+  `renders` has `groups`.
+- Components list: siblings of one type fold into one row by their parent, not only when they are next to each
+  other in reading order, so rows and cards with components inside fold too, and hide their insides while folded.
+- Demo: a trading home ("Markets") with streaming price wrappers, geometry-group cards, empty overlays, hosted tab
+  items and a shimmer.
+
 ## 0.2.11
 
 - Re-renders ties each view to the box SwiftUI recorded for the first view its `body` produced: the element of a

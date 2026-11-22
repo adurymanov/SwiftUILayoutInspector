@@ -530,7 +530,7 @@ final class InspectorSession: ObservableObject {
             scheduleCaptureSteps()
             return
         }
-        // Once a second, and never more than 5 % of the time: reading describes the whole graph.
+        // Once a second, at most 5 % of the time: without the short description a read covers the whole graph.
         if let heatmap, CACurrentMediaTime() - lastCountRead >= max(1, heatmap.lastReadDuration * 20) { readRenderCounts() }
         guard isHighlighting, configuration.autoRefresh || capture == nil else { return }
         guard frameCounter % 3 == 0, !isMoving else { return }

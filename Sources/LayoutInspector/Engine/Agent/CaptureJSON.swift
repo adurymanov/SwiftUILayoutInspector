@@ -44,9 +44,11 @@ enum CaptureJSON {
             "lint": lint,
         ]
         if let renderCounts {
-            let entries = renderCounts.byNode.values
-            object["renders"] = ["views": entries.count, "own": entries.filter { $0.instances == 1 }.count,
-                                 "shared": entries.filter { $0.instances > 1 }.count] as [String: Any]
+            let summary = renderCounts.summary
+            object["renders"] = ["views": summary.views, "own": summary.own, "shared": summary.shared,
+                                 "groups": renderCounts.sharedGroups(in: capture).map { group -> [String: Any] in
+                                     ["title": group.title, "count": group.count, "components": group.components, "graphViews": group.graphViews]
+                                 }] as [String: Any]
         }
         if let host = capture.swiftUIRoots.first {
             object["environment"] = Dictionary(ComponentDetails.environment(of: host).map { ($0.name, $0.value) }) { a, _ in a }

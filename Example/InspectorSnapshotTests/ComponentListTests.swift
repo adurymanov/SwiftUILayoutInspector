@@ -18,7 +18,7 @@ final class ComponentListTests: XCTestCase {
         let capture = try await harness.waitUntilLoaded(timeout: .seconds(20))
         capture.resolveFrames(in: harness.window)
         // iOS 18 names only a few views (a controller host), never the app's own screens.
-        if !capture.nodes(.component).contains(where: { ["AccountStatementsHistoryScreenContent", "WalletBalance", "HeavyScreen"].contains($0.title) || $0.title.hasPrefix("Heavy") }) {
+        if !capture.nodes(.component).contains(where: { ["AccountStatementsHistoryScreenContent", "WalletBalance", "HeavyScreen", "InstrumentCard"].contains($0.title) || $0.title.hasPrefix("Heavy") }) {
             harness.tearDown()
             throw XCTSkip("no component names on this iOS version (iOS 18)")
         }
@@ -140,10 +140,42 @@ final class ComponentListTests: XCTestCase {
         XCTAssertLessThanOrEqual(single.count, 2, describe)
         XCTAssertGreaterThanOrEqual(group.1.count, 8, describe)
         let opened = list.entries(rows, filter: filter, context: context, expanded: [group.0])
-        XCTAssertEqual(opened.count, entries.count + group.1.count, "the opened run and a row that folds it again")
+        // The opened run, its rows' insides and a row that folds it again in place of the group.
+        XCTAssertGreaterThanOrEqual(opened.count, entries.count + group.1.count)
+        XCTAssertTrue(opened.contains { if case let .close(key, _) = $0 { key == group.0 } else { false } })
+        let shown = Set(opened.compactMap { if case let .item(item) = $0 { item.node.id } else { nil } })
+        XCTAssertTrue(group.1.allSatisfy { shown.contains($0.node.id) })
         var search = context
         search.query = "Transaction"
         XCTAssertTrue(list.entries(rows, filter: filter, context: search, expanded: []).allSatisfy { if case .item = $0 { true } else { false } })
+    }
+
+    /// Rows of a list and cards of a grid have components inside, which come between them in screen order; tab items
+    /// sit in hosting controllers of their own. Each run still folds into one row, and hides the insides of its members.
+    func test_siblingsWithInsides_foldIntoOneRow() async throws {
+        let (harness, capture) = try await capture(MarketsScreen(showsShimmer: false))
+        defer { harness.tearDown() }
+        let list = list(capture)
+        let filter = ComponentList.Filter()
+        let context = ComponentList.Context(bounds: harness.window.bounds)
+        let rows = list.rows(filter, context)
+        let entries = list.entries(rows, filter: filter, context: context, expanded: [])
+        let describe = entries.map { entry -> String in
+            switch entry {
+            case let .item(item): "\(item.node.title) p\(item.parent ?? -1)"
+            case let .group(key, items): "GROUP \(key) ×\(items.count)"
+            case let .close(key, items): "OPEN \(key) ×\(items.count)"
+            }
+        }.joined(separator: "\n")
+        func group(_ title: String) -> [ComponentList.Item]? {
+            entries.lazy.compactMap { if case let .group(_, items) = $0, items.first?.node.title == title { items } else { nil } }.first
+        }
+        // A row is folded into its innermost component of the same size: InstrumentRow › PriceChangeStream › StreamValue.
+        XCTAssertGreaterThanOrEqual(group("StreamValue")?.count ?? 0, 3, describe)
+        XCTAssertEqual(group("InstrumentCard")?.count, 6, describe)
+        XCTAssertGreaterThanOrEqual(group("TabItemLabel")?.count ?? 0, 4, describe)
+        // Folded: nothing inside a card or a row is listed.
+        XCTAssertFalse(entries.contains { if case let .item(item) = $0 { ["PriceDelta", "InstrumentIcon"].contains(item.node.title) } else { false } }, describe)
     }
 
     /// The Module menu lists the screen's modules, keeps the rows of the one picked, and forgets a module the next

@@ -182,18 +182,25 @@ updated while profiling is on, and a view's `body` is one of those nodes. Profil
 on: switching to another mode, turning the overlay off or closing the inspector stops it, and with the mode off
 the inspector doesn't touch the profiler at all. Measured on the demo's Heavy home screen (iPhone 17 Pro
 simulator, iOS 27, 7 rounds of 20 forced updates): profiling on and off differ by less than the spread between
-rounds (medians 251 against 275 ms in one run, 306 against 307 ms in another). Reading the counts describes the
-app's whole AttributeGraph and takes 18–60 ms on the demo, more in a larger app; the first read after the mode is
-turned on takes about 0.15 s. Counts are read once a second, less often when a read is slow, so reading never
-takes more than 5 % of the time.
+rounds (medians 251 against 275 ms in one run, 306 against 307 ms in another). Counts are read once a second,
+and a read describes only the counted views' `body` nodes: about 1 ms on the demo. Which nodes are a `body` is
+worked out from a description of the app's whole graph, once for the views of each new capture (about 0.1 s on
+the demo's Heavy screen, more in a large app).
 
 Profiling is switched for the whole process: turning the mode on resets, and turning it off stops, a profile
 that Instruments' SwiftUI template may be recording at the same time.
 
-Each view is found in the graph through the first view its `body` produced, whose recorded box the capture keeps
-too, so one text component used two hundred times, in a lazy list with rows off screen, gets a count per label. Views that still can't be told apart get a
-faint outline and no label; the panel and the components list show their total once (`Σ12 across 3 views`). On
-iOS 18 the inspector can't reach the view graph, so the mode shows a note instead of counts.
+Each view is found in the graph from the outside in: inside the view of the nearest component around it, then by
+the box SwiftUI recorded for the first view its `body` produced, then by its texts. So one text component used two
+hundred times, in a lazy list with rows off screen, gets a count per label, and so do the insides of cards that
+are geometry groups, views whose `body` draws nothing and tab items in hosting controllers of their own. Views
+that still can't be told apart get a faint outline and no label; the panel and the components list show the same
+tally (`2 of 118 views share a count…`) and each such group once (`AmountText: Σ12 shared by 2 views (5 in the graph)`).
+
+`ViewModifier`s are counted too: an `Animatable` modifier with a repeating animation (a shimmer) runs its `body`
+on every frame of the animation, while the view it is applied to doesn't. Its count is drawn on that view and
+shown on its row in the components list. On iOS 18 the inspector can't reach the view graph, so the mode shows a
+note instead of counts.
 
 The summary sits in a glass panel at the bottom, above the app's tab bar or toolbar (Lint's issue list and
 Measure's hint too). A tap folds it into a
@@ -471,7 +478,7 @@ open LayoutInspectorExample.xcodeproj
 # open a screen right away:
 xcrun simctl launch booted dev.layoutinspector.example \
   -screen profile -inspector spacing -presentation sheet -toolbar hidden
-#   -screen        profile | feed | checkout | dashboard | promo | glass | spaces | heavy | rerenders
+#   -screen        profile | feed | checkout | dashboard | promo | glass | spaces | heavy | rerenders | deep | labels | markets
 #   -inspector     components | spacing | typography | constraints | uikit | lint | measure | rerenders
 #   -presentation  push | sheet | fullScreen | window (a window of its own at .alert + 99)
 #   -toolbar       visible | hidden

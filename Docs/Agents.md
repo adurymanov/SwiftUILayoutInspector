@@ -131,12 +131,14 @@ Present when they apply:
 | `image` | `name`, `symbol`, `naturalSize`. |
 | `shape`, `fill`, `decorations` | |
 | `uikit` | UIKit views: `className`, `text`, `font`, `color`, `constraints` (Auto Layout as text), `autoLayout`, `ambiguous`, `stackSpacing`, `appView`. |
-| `renders` | Components while the Re-renders mode is on: `count`, how many times the `body` ran since the mode was turned on or reset, and `views`, how many views of the type share that count (1 = this view's own). Counted up to the capture the file belongs to: `li refresh` writes the counts so far. |
+| `renders` | Components while the Re-renders mode is on, `ViewModifier`s included: `count`, how many times the `body` ran since the mode was turned on or reset, and `views`, how many views of the graph share that count (1 = this view's own). Counted up to the capture the file belongs to: `li refresh` writes the counts so far. |
 | `properties` | Components told apart from the others of their type: the view's stored properties as its parent built it. Each has `name`, `kind` (`value`, `state`, `binding`, `environment`, `observed`), `type` and, when it can be read, `value` as one line of text. `@State` and `@Environment` have no `value`: SwiftUI keeps them in its own storage. Off by default, because the values are app data written to disk: launch the app with `LAYOUT_INSPECTOR_PROPERTIES=1` (`SIMCTL_CHILD_LAYOUT_INSPECTOR_PROPERTIES=1` with `simctl launch`). |
 | `accessibility` | `identifier`, `label`. The app fills it for UIKit views only: SwiftUI builds its accessibility tree only while an accessibility client is connected, and reading it from inside the app costs too much. `li` reads the simulator's accessibility tree from the Mac (with `simtool` or `axe`) and adds it to SwiftUI nodes by frame; it then also writes the elements to a top-level `accessibility` list (`frame`, `identifier`, `label`, `role`, `node`) and sets `"accessibilitySource": "mac"`. |
 
 With Re-renders on, the top-level `renders` says how many components have a count (`views`), how many of them are
-their own (`own`) and how many share one with views of their type the inspector can't tell apart (`shared`).
+their own (`own`) and how many share one with views of their type the inspector can't tell apart (`shared`), the
+same numbers the panel shows. `groups` lists each shared count once: `title`, `count` (the total), `components` (the
+components on screen that share it) and `graphViews` (the views of the graph behind it, on screen or not).
 
 The top-level `environment` holds the values layout depends on, from the traits of the first hosting view:
 `colorScheme`, `dynamicTypeSize`, `layoutDirection`, `legibilityWeight`, size classes, `displayScale`, `locale`.

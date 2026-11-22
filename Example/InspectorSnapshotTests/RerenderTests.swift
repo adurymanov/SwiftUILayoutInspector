@@ -132,6 +132,76 @@ final class RerenderTests: XCTestCase {
         XCTAssertEqual(labels.compactMap { counts.byNode[$0.id]?.count }.reduce(0, +), 3)
     }
 
+    /// A trading app's home: prices in generic streaming wrappers around a TimelineView, the same "0.00%" everywhere,
+    /// cards that are geometry groups (SwiftUI records the same box inside every card), overlays that draw nothing,
+    /// and tab items in hosting controllers of their own, two at each place. Each one is still counted on its own, and
+    /// a change in one price lands on that price's views only.
+    func test_streamingWrappers_countEachView() async throws {
+        guard RenderProfiler.isAvailable else { throw XCTSkip("AttributeGraph profiling is not available") }
+        let model = MarketsModel()
+        let harness = ScreenHarness(MarketsScreen(model: model, showsShimmer: false))
+        defer { harness.tearDown() }
+        let capture = try await harness.waitUntilLoaded()
+        let heatmap = RenderHeatmap()
+        heatmap.profiler.start(hosts: Self.hosts(in: harness.window))
+        defer { heatmap.profiler.stop() }
+        try Self.skipWithoutGraph(heatmap)
+        heatmap.map(capture)
+
+        let quote = try XCTUnwrap(model.quotes["NVDA"])
+        for _ in 0..<3 { quote.percent += 1; harness.window.layoutIfNeeded() }
+        let counts = heatmap.read()
+        let summary = counts.summary
+        XCTAssertGreaterThan(summary.views, 80)
+        XCTAssertLessThan(Double(summary.shared) / Double(summary.views), 0.05, "views sharing a count: \(counts.sharedGroups(in: capture))")
+        for title in ["TabItemLabel", "InstrumentCard", "InstrumentRow", "PriceDelta", "StreamValue"] {
+            let nodes = capture.swiftUINodes.filter { $0.kind == .component && $0.title == title }
+            XCTAssertFalse(nodes.isEmpty, title)
+            XCTAssertEqual(nodes.filter { (counts.byNode[$0.id]?.instances ?? 1) > 1 }.count, 0, "\(title) sharing a count")
+            // A view the inspector can't place for sure gets no count at all, rarely.
+            XCTAssertLessThanOrEqual(nodes.filter { counts.byNode[$0.id] == nil }.count, max(2, nodes.count / 10), "\(title) without a count")
+        }
+        // The price of NVDA, in its card and in its row; every other price stays at zero.
+        func owner(_ node: InspectorNode) -> String? {
+            node.path.last { $0.title == "InstrumentCard" || $0.title == "InstrumentRow" }.map { ComponentGraph.texts(in: $0).contains("NVDA") ? "NVDA" : "other" }
+        }
+        let deltas = capture.swiftUINodes.filter { $0.kind == .component && $0.title == "PriceDelta" && owner($0) != nil }
+        // (The capture doesn't show every PriceDelta of the rows: the ones it shows are checked.)
+        let nvda = deltas.filter { owner($0) == "NVDA" }.map { counts.byNode[$0.id]?.count }
+        XCTAssertFalse(nvda.isEmpty)
+        XCTAssertEqual(Set(nvda), [3])
+        XCTAssertEqual(Set(deltas.filter { owner($0) == "other" }.map { counts.byNode[$0.id]?.count }), [0])
+    }
+
+    /// An `Animatable` modifier with a repeating animation runs its `body` on every frame; the view it is applied to
+    /// doesn't. The count is the modifier's, shown on that view's row in the components list.
+    func test_animatableModifier_countsEveryFrame() async throws {
+        guard RenderProfiler.isAvailable else { throw XCTSkip("AttributeGraph profiling is not available") }
+        // Started after the capture: a capture waits for the screen to settle, and a shimmer never does.
+        let shimmerSwitch = ShimmerSwitch(isOn: false)
+        let harness = ScreenHarness(VStack { NewProductsButton(shimmer: shimmerSwitch); Spacer() }.padding(.top, 80))
+        defer { harness.tearDown() }
+        let capture = try await harness.waitUntilLoaded()
+        try XCTSkipIf(capture.nodes(.component).isEmpty, "no component names on this iOS version (iOS 18)")
+        let heatmap = RenderHeatmap()
+        heatmap.profiler.start(hosts: Self.hosts(in: harness.window))
+        defer { heatmap.profiler.stop() }
+        try Self.skipWithoutGraph(heatmap)
+        heatmap.map(capture)
+        shimmerSwitch.isOn = true
+        try await Task.sleep(for: .seconds(1))
+        let counts = heatmap.read()
+        let shimmer = try XCTUnwrap(capture.swiftUINodes.first { $0.title == "Shimmer" })
+        let button = try XCTUnwrap(capture.swiftUINodes.first { $0.title == "NewProductsButton" })
+        XCTAssertGreaterThan(counts.byNode[shimmer.id]?.count ?? 0, 10, "a body per animation frame")
+        XCTAssertEqual(counts.byNode[shimmer.id]?.instances, 1)
+        // The button's own body ran only when the switch started the animation.
+        XCTAssertLessThanOrEqual(counts.byNode[button.id]?.count ?? 99, 2)
+        let list = ComponentList(capture, modifierTypes: ComponentGraph.modifierTypes(in: capture))
+        let row = try XCTUnwrap(list.folded.first { $0.node === button || $0.wrappers.contains { $0 === button } })
+        XCTAssertEqual(ComponentList.wrapperRenders(of: row, counts: counts).map(\.title), ["Shimmer"])
+    }
+
     /// Views that share a count are not labelled one by one: the total shows once, in the panel.
     func test_sharedCount_isShownOnce() async throws {
         let harness = ScreenHarness(RerenderScreen())
@@ -151,9 +221,9 @@ final class RerenderTests: XCTestCase {
         _ = InspectorImageRenderer.image(of: harness.window, capture: capture, options: options)
         let lines = try XCTUnwrap(card.content?.lines)
         XCTAssertEqual(lines.first, "hottest: WalletBalance 5")
-        XCTAssertEqual(lines.filter { $0.contains("QuoteRow") }, ["QuoteRow: Σ6 across 3 views it can't tell apart"])
-        XCTAssertEqual(ComponentListView.sharedCounts(counts, items: ComponentList(capture).all),
-                       ["QuoteRow Σ6 across 3 views it can't tell apart"])
+        XCTAssertEqual(lines.filter { $0.contains("QuoteRow") }, ["QuoteRow: Σ6 shared by 3 views (3 in the graph)"])
+        XCTAssertTrue(lines.contains("3 of 4 views share a count with views they can't be told from:"), "\(lines)")
+        XCTAssertEqual(ComponentListView.sharedCounts(counts, capture: capture), ["QuoteRow: Σ6 shared by 3 views (3 in the graph)"])
     }
 
     /// A sheet counted while it is on screen goes away: nothing keeps its graph, and profiling ends with its inspector.
@@ -208,7 +278,7 @@ final class RerenderTests: XCTestCase {
         heatmap.map(capture)
         let map = heatmap.lastMapDuration
         var reads: [Double] = []
-        for _ in 0..<5 { _ = heatmap.read(); reads.append(heatmap.lastReadDuration) }
+        for _ in 0..<5 { _ = spin(1); _ = heatmap.read(); reads.append(heatmap.lastReadDuration) }
 
         func ms(_ v: [Double]) -> String { v.map { String(format: "%.1f", $0 * 1000) }.joined(separator: " / ") }
         func median(_ v: [Double]) -> Double { v.sorted()[v.count / 2] }

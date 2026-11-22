@@ -10,6 +10,8 @@ struct RenderCounts: Equatable {
         /// Views the count is shared by: 1 when the count is this view's own. More when AttributeGraph holds a different
         /// number of views of the type than the capture shows, so they cannot be told apart.
         var instances: Int
+        /// The components that share one count have the same group (the views they share).
+        var group = 0
 
         var perView: Double { Double(count) / Double(max(instances, 1)) }
         var label: String { instances > 1 ? "Σ\(count)/\(instances)" : "\(count)" }
@@ -24,11 +26,49 @@ struct RenderCounts: Equatable {
     }
 
     var maxPerView: Double { byNode.values.map(\.perView).max() ?? 0 }
+
+    /// Components with a count, and how many of them have their own. The one tally the panel, the components list and
+    /// `capture.json` show.
+    struct Summary: Equatable {
+        var views = 0
+        var own = 0
+        var shared: Int { views - own }
+    }
+
+    var summary: Summary {
+        Summary(views: byNode.count, own: byNode.values.filter { $0.instances == 1 }.count)
+    }
+
+    /// Components that share one count, as the inspector shows them: by type, then by count.
+    struct SharedGroup: Equatable {
+        var title: String
+        /// The total of the graph's views behind them.
+        var count: Int
+        /// Components on screen that share it.
+        var components: Int
+        /// Views of that type the graph holds there, on screen or not.
+        var graphViews: Int
+
+        var line: String {
+            let on = components == 1 ? "1 view" : "\(components) views"
+            return "\(title): Σ\(count) shared by \(on) (\(graphViews) in the graph)"
+        }
+    }
+
+    func sharedGroups(in capture: InspectorCapture) -> [SharedGroup] {
+        var groups: [Int: SharedGroup] = [:]
+        for (id, entry) in byNode where entry.instances > 1 {
+            guard let node = capture.node(withID: id) else { continue }
+            groups[entry.group, default: SharedGroup(title: node.title, count: entry.count, components: 0, graphViews: entry.instances)].components += 1
+        }
+        return groups.values.sorted { ($0.count, $0.components, $1.title) > ($1.count, $1.components, $0.title) }
+    }
 }
 
 /// Counts `body` evaluations with AttributeGraph's own profiler (`AGGraphStartProfiling`): every graph node records
 /// how often it was updated while profiling is on. A component's `body` is a node (`StaticBody<ViewBodyAccessor<V>>`
-/// or `DynamicBody<…>`) owned by the component's tree element, so the counts are exact and per view.
+/// or `DynamicBody<…>`, `…ModifierBodyAccessor<M>…` for a `ViewModifier`) owned by the component's tree element, so
+/// the counts are exact and per view.
 ///
 /// Profiling runs only between ``start(hosts:)`` and ``stop()``. Nothing here is touched otherwise.
 final class RenderProfiler {
@@ -98,24 +138,120 @@ final class RenderProfiler {
 
     /// What the graphs of `hosts` have counted so far, read without starting, stopping or resetting anything.
     static func recordedBodyCounts(hosts: [UIView], nodes: Set<UInt32>) -> [UInt32: Int] {
-        bodyCounts(of: nodes, in: graphs(of: hosts))
+        let graphs = graphs(of: hosts)
+        var kinds: [UInt32: NodeKind] = [:]
+        classify(nodes, in: graphs, into: &kinds)
+        return bodyCounts(of: nodes, in: graphs, kinds: &kinds)
     }
 
     // MARK: - Reading
+    //
+    // AttributeGraph keeps an update count per node while profiling, and gives it out only through a description of
+    // the graph. The full description (`graph/dict`) has every node of the app's graph: tens of thousands in a big app,
+    // 0.3 s on the main thread. The `graph/dot` description takes `attribute-ids` and describes only those nodes, with
+    // the count in each label ("…\n0.01%: 3 × 0.50μs"), in about a millisecond; but its label names the node's value
+    // type, not its rule, so it can't tell a view's `body` from its other nodes. Nodes are therefore classified once,
+    // from the full description, when they first come up (a new capture with new views), and read through the
+    // short one every time after.
 
-    func bodyCounts(of nodes: Set<UInt32>) -> [UInt32: Int] {
-        Self.bodyCounts(of: nodes, in: liveGraphs())
+    private enum NodeKind: Equatable {
+        /// A `body` node, with the label the short description first gave it.
+        case body(label: String?)
+        case other
+        /// In no graph when it was classified; looked up again with the next capture.
+        case absent
     }
 
-    /// Update counts of the body nodes among `nodes`, by node. Nodes that aren't a view's body are left out.
-    /// Reads the description through `NSDictionary` / `NSArray`: bridging it to Swift collections copies the whole graph
-    /// and costs several times more than AttributeGraph takes to describe it.
-    private static func bodyCounts(of nodes: Set<UInt32>, in graphs: [UnsafeRawPointer]) -> [UInt32: Int] {
+    private var kinds: [UInt32: NodeKind] = [:]
+    /// The view each classified node belonged to (its value node). AttributeGraph reuses the ids of nodes that went
+    /// away: a node that turns up under another view is classified again, and so is one whose label changed.
+    private var owners: [UInt32: UInt32] = [:]
+
+    /// Classifies the nodes of a new capture that weren't classified for the same view before (one full description),
+    /// so that reading them stays short. `owners`: node → the value node of the view that owns it.
+    func prepare(_ owners: [UInt32: UInt32]) {
+        kinds = kinds.filter { node, kind in kind != .absent && owners[node] == self.owners[node] && owners[node] != nil }
+        self.owners = owners
+        let unknown = Set(owners.keys.filter { kinds[$0] == nil })
+        let graphs = liveGraphs()
+        guard !unknown.isEmpty, !graphs.isEmpty else { return }
+        Self.classify(unknown, in: graphs, into: &kinds)
+    }
+
+    func bodyCounts(of nodes: Set<UInt32>) -> [UInt32: Int] {
+        Self.bodyCounts(of: nodes, in: liveGraphs(), kinds: &kinds)
+    }
+
+    private static func bodyCounts(of nodes: Set<UInt32>, in graphs: [UnsafeRawPointer], kinds: inout [UInt32: NodeKind]) -> [UInt32: Int] {
+        let bodies = nodes.filter { if case .body = kinds[$0] { true } else { false } }
+        guard !bodies.isEmpty else { return [:] }
+        let ids = NSMutableIndexSet()
+        for node in bodies { ids.add(Int(node)) }
         var result: [UInt32: Int] = [:]
+        for graph in graphs {
+            autoreleasepool {
+                guard let labels = labels(of: ids, in: graph) else {
+                    // No short description on this version: the full one, every time.
+                    for (node, count) in classify(bodies, in: [graph], into: &kinds) where result[node] == nil { result[node] = count }
+                    return
+                }
+                for (node, label) in labels where bodies.contains(node) && result[node] == nil {
+                    let (name, count) = parse(label)
+                    switch kinds[node] {
+                    case .body(nil)?: kinds[node] = .body(label: name)
+                    case .body(let known?)? where known != name:
+                        // Reused by a node of another type: no count until the next capture classifies it again.
+                        kinds[node] = .absent
+                        continue
+                    default: break
+                    }
+                    result[node] = count
+                }
+            }
+        }
+        return result
+    }
+
+    /// The labels of `ids` in the short description, by node. `nil` when this AttributeGraph has no such description.
+    private static func labels(of ids: NSIndexSet, in graph: UnsafeRawPointer) -> [UInt32: Substring]? {
+        let options = ["format": "graph/dot", "include-values": false, "attribute-ids": ids] as CFDictionary
+        guard let text = LIAGGraphDescription(graph, options)?.takeUnretainedValue() as? String, text.hasPrefix("digraph") else { return nil }
+        var result: [UInt32: Substring] = [:]
+        // `  _22224[label="22224: VStack<…>\n0.0054%: 3 × 0.50μs"];`; edges (`_1 -> _2[]`) have no label.
+        for line in text.split(separator: "\n") {
+            guard let open = line.range(of: "[label=\""), line.first(where: { $0 != " " }) == "_" else { continue }
+            let id = line[line.index(after: line.firstIndex(of: "_")!)..<open.lowerBound]
+            guard let node = UInt32(id), let close = line.range(of: "\"", range: open.upperBound..<line.endIndex) else { continue }
+            result[node] = line[open.upperBound..<close.lowerBound]
+        }
+        return result
+    }
+
+    /// The type part of a label and the update count after it (0 when the node never updated).
+    private static func parse(_ label: Substring) -> (name: String, count: Int) {
+        let parts = label.components(separatedBy: "\\n")
+        var count = 0
+        for part in parts.dropFirst() {
+            guard let percent = part.range(of: "%: "), let times = part.range(of: " × ", range: percent.upperBound..<part.endIndex),
+                  let value = Int(part[percent.upperBound..<times.lowerBound]) else { continue }
+            count = value
+            break
+        }
+        return (parts.first ?? "", count)
+    }
+
+    /// Marks each of `nodes` as a view's `body` or not, from the rule types of the full description.
+    /// Reads it through `NSDictionary` / `NSArray`: bridging it to Swift collections copies the whole graph and costs
+    /// several times more than AttributeGraph takes to describe it.
+    @discardableResult
+    private static func classify(_ nodes: Set<UInt32>, in graphs: [UnsafeRawPointer], into kinds: inout [UInt32: NodeKind]) -> [UInt32: Int] {
+        var counts: [UInt32: Int] = [:]
         var seenGraphs = Set<Int>()
         for graph in graphs {
             autoreleasepool {
-                guard let description = describe(graph),
+                let options = ["format": "graph/dict", "include-values": false] as CFDictionary
+                // Not +1: forty descriptions grow the footprint by 256 KB, not by forty graphs.
+                guard let description = LIAGGraphDescription(graph, options)?.takeUnretainedValue() as? NSDictionary,
                       let list = description.object(forKey: "graphs") as? NSArray else { return }
                 for case let g as NSDictionary in list {
                     if let id = (g.object(forKey: "id") as? NSNumber)?.intValue {
@@ -129,24 +265,23 @@ final class RenderProfiler {
                               let type = (entry.object(forKey: "type") as? NSNumber)?.intValue else { continue }
                         let body = isBody[type] ?? {
                             let name = type < types.count ? ((types[type] as? NSDictionary)?.object(forKey: "name") as? String) ?? "" : ""
-                            let value = name.contains("Body<ViewBodyAccessor<")
+                            let value = name.contains("Body<ViewBodyAccessor<") || name.contains("Body<ModifierBodyAccessor<")
                             isBody[type] = value
                             return value
                         }()
-                        guard body else { continue }
-                        let profile = entry.object(forKey: "profile") as? NSDictionary
-                        result[id] = (profile?.object(forKey: "update_count") as? NSNumber)?.intValue ?? 0
+                        if body {
+                            if case .body = kinds[id] {} else { kinds[id] = .body(label: nil) }
+                            let profile = entry.object(forKey: "profile") as? NSDictionary
+                            counts[id] = (profile?.object(forKey: "update_count") as? NSNumber)?.intValue ?? 0
+                        } else {
+                            kinds[id] = .other
+                        }
                     }
                 }
             }
         }
-        return result
-    }
-
-    private static func describe(_ graph: UnsafeRawPointer) -> NSDictionary? {
-        let options = ["format": "graph/dict", "include-values": false] as CFDictionary
-        // Not +1: forty descriptions grow the footprint by 256 KB, not by forty graphs.
-        return LIAGGraphDescription(graph, options)?.takeUnretainedValue() as? NSDictionary
+        for node in nodes where kinds[node] == nil { kinds[node] = .absent }
+        return counts
     }
 
     // MARK: - Views
@@ -157,15 +292,12 @@ final class RenderProfiler {
     }
 }
 
-/// Ties a capture's components to their body nodes and reads their counts.
-///
-/// A capture builds its nodes in the order of SwiftUI's tree (``InspectorNode/id`` grows with it, before the children
-/// are sorted by position), and AttributeGraph walks the same tree: the k-th `Row` of a host in one is the k-th `Row` in
-/// the other. When the numbers differ (a view the capture could not place), the views of that type share their total.
+/// Ties a capture's components to their body nodes (``ComponentGraph/match(_:)``, once per capture) and reads their
+/// counts. Components that couldn't be told apart get the total of the views they share.
 final class RenderHeatmap {
     let profiler = RenderProfiler()
     private weak var mappedCapture: InspectorCapture?
-    private var slots: [(node: Int, nodes: [UInt32], instances: Int)] = []
+    private var slots: [(node: Int, nodes: [UInt32], instances: Int, group: Int)] = []
     private var wanted = Set<UInt32>()
 
     /// Timings of the last `map` and `read`, for the log.
@@ -176,8 +308,15 @@ final class RenderHeatmap {
         guard mappedCapture !== capture else { return }
         let start = CACurrentMediaTime()
         mappedCapture = capture
-        slots = ComponentGraph.match(capture).map { id, match in (id, match.views.flatMap(\.nodes), match.views.count) }
+        let matches = ComponentGraph.match(capture)
+        slots = matches.map { id, match in
+            let nodes = match.views.flatMap(\.nodes)
+            return (id, nodes, match.views.count, nodes.sorted().hashValue)
+        }
         wanted = Set(slots.flatMap(\.nodes))
+        var owners: [UInt32: UInt32] = [:]
+        for match in matches.values { for view in match.views { for node in view.nodes { owners[node] = view.valueNode } } }
+        profiler.prepare(owners)
         lastMapDuration = CACurrentMediaTime() - start
     }
 
@@ -191,7 +330,7 @@ final class RenderHeatmap {
         for slot in slots {
             let bodies = slot.nodes.compactMap { counts[$0] }
             guard !bodies.isEmpty else { continue }
-            result.byNode[slot.node] = RenderCounts.Entry(count: bodies.reduce(0, +), instances: slot.instances)
+            result.byNode[slot.node] = RenderCounts.Entry(count: bodies.reduce(0, +), instances: slot.instances, group: slot.group)
         }
         return result
     }

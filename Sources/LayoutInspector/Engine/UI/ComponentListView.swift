@@ -102,6 +102,7 @@ struct ComponentListView: View {
                         case let .item(item):
                             ComponentRowView(item: item, parent: item.parent.map { items[$0].node.title },
                                              renders: counts?.byNode[item.node.id],
+                                             modifierRenders: ComponentList.wrapperRenders(of: item, counts: counts),
                                              isSelected: session.selectedID == item.node.id,
                                              select: { session.select(item.target); reveal() },
                                              info: { open(item, in: items) })
@@ -117,7 +118,7 @@ struct ComponentListView: View {
                     }
                 } header: {
                     FilterBar(model: model, modules: model.list.modules, hasCounts: counts != nil, rowCount: rows.count,
-                              shared: Self.sharedCounts(counts, items: model.list.all))
+                              shared: Self.sharedCounts(counts, capture: session.capture))
                 }
             }
             .listStyle(.plain)
@@ -159,14 +160,10 @@ struct ComponentListView: View {
         }
     }
 
-    /// Types whose views share one count, once each: "BrandLabel Σ12 across 74 views".
-    static func sharedCounts(_ counts: RenderCounts?, items: [ComponentList.Item]) -> [String] {
-        guard let counts else { return [] }
-        var shared: [String: RenderCounts.Entry] = [:]
-        for item in items {
-            if let entry = counts.byNode[item.node.id], entry.instances > 1 { shared[item.node.title] = entry }
-        }
-        return shared.sorted { $0.key < $1.key }.map { "\($0.key) Σ\($0.value.count) across \($0.value.instances) views it can't tell apart" }
+    /// Views that share one count, once per group, as the panel shows them: "BrandLabel: Σ12 shared by 2 views (74 in the graph)".
+    static func sharedCounts(_ counts: RenderCounts?, capture: InspectorCapture?) -> [String] {
+        guard let counts, let capture else { return [] }
+        return counts.sharedGroups(in: capture).map(\.line)
     }
 
     private func startPicking() {
@@ -300,6 +297,7 @@ private struct ComponentRowView: View {
     let item: ComponentList.Item
     let parent: String?
     let renders: RenderCounts.Entry?
+    let modifierRenders: [(title: String, entry: RenderCounts.Entry)]
     let isSelected: Bool
     let select: () -> Void
     let info: () -> Void
@@ -323,6 +321,16 @@ private struct ComponentRowView: View {
                                 .background(Color(InspectorRenderer.heatColor(1)).opacity(0.2), in: Capsule())
                                 .fixedSize()
                                 .accessibilityLabel("\(renders.label) renders")
+                        }
+                        ForEach(modifierRenders, id: \.title) { modifier in
+                            Text("\(modifier.title) \(modifier.entry.label)")
+                                .font(.caption2.monospacedDigit().weight(.semibold))
+                                .lineLimit(1)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color(InspectorRenderer.heatColor(1)).opacity(0.2), in: Capsule())
+                                .fixedSize()
+                                .accessibilityLabel("\(modifier.title) \(modifier.entry.label) renders")
                         }
                     }
                     HStack(spacing: 6) {

@@ -60,13 +60,10 @@ extension InspectorRenderer {
         } else {
             lines.append("no view re-rendered since the mode was turned on or reset")
         }
-        var shared: [String: RenderCounts.Entry] = [:]
-        for (id, entry) in counts.byNode where entry.instances > 1 {
-            guard let node = capture.node(withID: id) else { continue }
-            shared[node.title] = entry
-        }
-        for (title, entry) in shared.sorted(by: { $0.value.count != $1.value.count ? $0.value.count > $1.value.count : $0.key < $1.key }) {
-            lines.append("\(title): Σ\(entry.count) across \(entry.instances) views it can't tell apart")
+        let summary = counts.summary
+        if summary.shared > 0 {
+            lines.append("\(summary.shared) of \(summary.views) views share a count with views they can't be told from:")
+            lines += counts.sharedGroups(in: capture).map(\.line)
         }
         if !showsZeros { lines.append("views that didn't re-render are not marked (Dev → Show zeros)") }
         return lines

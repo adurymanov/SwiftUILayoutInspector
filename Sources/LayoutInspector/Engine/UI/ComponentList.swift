@@ -230,11 +230,25 @@ struct ComponentList {
                 return a.order < b.order
             }
         case .rerenders:
-            rows.sort { (context.counts?.byNode[$0.node.id]?.count ?? 0, -$0.order) > (context.counts?.byNode[$1.node.id]?.count ?? 0, -$1.order) }
+            rows.sort { (Self.hottest($0, context.counts), -$0.order) > (Self.hottest($1, context.counts), -$1.order) }
         case .area:
             rows.sort { ($0.frame.area, -$0.order) > ($1.frame.area, -$1.order) }
         }
         return rows
+    }
+
+    /// Counts of the modifiers folded into a row, by their names: an `Animatable` modifier (a shimmer) runs its `body`
+    /// on every frame of its animation, while the view it is applied to doesn't.
+    static func wrapperRenders(of item: Item, counts: RenderCounts?) -> [(title: String, entry: RenderCounts.Entry)] {
+        guard let counts else { return [] }
+        return item.wrappers.compactMap { wrapper in
+            counts.byNode[wrapper.id].flatMap { $0.count > 0 && $0.instances == 1 ? (wrapper.title, $0) : nil }
+        }
+    }
+
+    /// The highest count of a row: its own or one of its folded modifiers'.
+    static func hottest(_ item: Item, _ counts: RenderCounts?) -> Int {
+        ([counts?.byNode[item.node.id]?.count ?? 0] + wrapperRenders(of: item, counts: counts).map(\.entry.count)).max() ?? 0
     }
 
     /// A row of the list: one component, or a run of siblings of one type ("Row ×14") that opens with a tap.
@@ -253,30 +267,60 @@ struct ComponentList {
         }
     }
 
-    /// Runs of three or more siblings of one type, next to each other in `rows`, become one group unless `expanded`
-    /// holds its key. Only in screen order without a picked point or a search: there the order is the screen's.
+    /// Three or more siblings of one type (rows of a list, cards of a grid, tab items) become one group unless
+    /// `expanded` holds its key; a folded group hides what is inside its members too. The group takes the place of its
+    /// first member: in screen order the members' insides come between them, so siblings are found by their parent,
+    /// not by being next to each other. Only in screen order without a picked point or a search.
     func entries(_ rows: [Item], filter: Filter, context: Context, expanded: Set<String>, selected: Int? = nil) -> [Entry] {
         guard filter.sort == .screen, context.point == nil, context.query.trimmingCharacters(in: .whitespaces).isEmpty else {
             return rows.map(Entry.item)
         }
-        var result: [Entry] = []
-        var index = 0
-        while index < rows.count {
-            var end = index + 1
-            while end < rows.count, rows[end].node.typeName == rows[index].node.typeName, rows[end].parent == rows[index].parent { end += 1 }
-            let run = Array(rows[index..<end])
+        let items = items(folded: filter.hidesWrappers)
+        struct Siblings: Hashable { let parent: Int?; let type: String }
+        var runs: [Siblings: [Item]] = [:]
+        for row in rows { runs[Siblings(parent: row.parent, type: row.node.typeName), default: []].append(row) }
+        runs = runs.filter { $0.value.count >= 3 }
+        // A group with the selected component in it (or inside one of its members) stays open.
+        var selectedPath = Set<Int>()
+        if let selected, let start = items.firstIndex(where: { $0.node.id == selected || $0.wrappers.contains { $0.id == selected } }) {
+            selectedPath.insert(selected)
+            var index = start
+            while let parent = items[index].parent { selectedPath.insert(items[parent].node.id); index = parent }
+        }
+        var keys: [Siblings: String] = [:]
+        var usedKeys = Set<String>()
+        var folded = Set<Int>()   // members of groups shown folded
+        for (siblings, run) in runs.sorted(by: { $0.value[0].order < $1.value[0].order }) {
             // Stable across captures: the parent's type and the run's type.
-            let parentType = rows[index].parent.map { items(folded: filter.hidesWrappers)[$0].node.typeName } ?? "-"
-            let key = "\(parentType):\(rows[index].node.typeName)"
-            if run.count >= 3, !expanded.contains(key), !run.contains(where: { $0.node.id == selected }) {
-                result.append(.group(key: key, items: run))
-            } else if run.count >= 3, expanded.contains(key) {
-                result.append(.close(key: key, items: run))
-                result += run.map(Entry.item)
-            } else {
-                result += run.map(Entry.item)
+            let base = "\(siblings.parent.map { items[$0].node.typeName } ?? "-"):\(siblings.type)"
+            var key = base
+            var n = 2
+            while usedKeys.contains(key) { key = "\(base)#\(n)"; n += 1 }
+            usedKeys.insert(key)
+            keys[siblings] = key
+            if !expanded.contains(key), !run.contains(where: { selectedPath.contains($0.node.id) }) { folded.formUnion(run.map(\.node.id)) }
+        }
+        func isInsideFolded(_ row: Item) -> Bool {
+            var next = row.parent
+            while let index = next {
+                if folded.contains(items[index].node.id) { return true }
+                next = items[index].parent
             }
-            index = end
+            return false
+        }
+        var result: [Entry] = []
+        var started = Set<Siblings>()
+        for row in rows where !isInsideFolded(row) {
+            let siblings = Siblings(parent: row.parent, type: row.node.typeName)
+            if let key = keys[siblings], let run = runs[siblings] {
+                let first = started.insert(siblings).inserted
+                if folded.contains(row.node.id) {
+                    if first { result.append(.group(key: key, items: run)) }
+                    continue
+                }
+                if first, expanded.contains(key) { result.append(.close(key: key, items: run)) }
+            }
+            result.append(.item(row))
         }
         return result
     }
@@ -310,6 +354,7 @@ struct ComponentList {
             if let parent = row.parent { line += "  in \(items[parent].node.title)" }
             if !row.wrappers.isEmpty { line += "  +\(row.wrappers.count) wrappers" }
             if let entry = counts?.byNode[row.node.id], entry.count > 0 { line += "  renders \(entry.label)" }
+            for (title, entry) in Self.wrapperRenders(of: row, counts: counts) { line += "  \(title) renders \(entry.label)" }
             lines.append(line)
         }
         return lines.joined(separator: "\n")
