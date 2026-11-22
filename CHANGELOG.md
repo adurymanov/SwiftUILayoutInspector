@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.13
+
+- Re-renders on a big app's trading home. Content a container gets from its caller (the cards of a grid, declared
+  by the section around it) sits in AttributeGraph under the caller, beside the container: it is now looked for
+  there right after the container itself. Views drawn twice at one place (a press effect drawing its content again on
+  top) count as one view. Away from the nearest component, a component is still tied to a view by its recorded box
+  when no other waiting component could take that view; a component whose box has no size is placed by its origin.
+  Recorded home of 528 components: 172 of 272 components with a count shared one; now 25 of 461 (the tests replay
+  the recording and require under 20 %).
+- `LAYOUT_INSPECTOR_MATCH_DUMP=<dir>` records what matching read for each capture (`match-NNN.json`), and
+  `Tools/anonymize-match.py` replaces its names and texts with tokens, so a screen of any app can be replayed offline
+  (`ComponentMatcher`, `MatchReplayTests`).
+- Mapping components to the graph no longer holds the main thread: the views of each host are read in a frame of
+  their own, then the matching; `body` nodes are classified by the type of their rule (`AGGraphGetAttributeInfo`)
+  as they are read, not from a description of the whole graph; and reading AttributeGraph trees skips the lookup of
+  child subgraphs on elements none hang from (also in captures). On the big app's home the mapping took 375 ms in
+  one step; read a host a frame, its biggest host took 297 ms, 82 % of it in that lookup. A mapping is dropped
+  when the content scrolls or hosts change under it. `capture.json` → `capture.rendersMap` has the timings; in
+  Re-renders a capture's report waits for its counts.
+- Components list with the default filters: a modifier folded into a row shows its count on that row, shared or
+  not, and the shared counts above the list are only those of the rows shown. The capture knows the app's
+  `ViewModifier` types from its own trees, and a view named `…Modifier` folds as one too. Visible also drops what is
+  outside its host's on-screen part (clipping containers) and the second copy of bar items a tab bar draws twice.
+  `capture.json` → `components` has the rows as the list shows them.
+- Demo: Markets cards come in three sections whose grids get them from the caller, and the press effect draws the
+  card twice.
+
 ## 0.2.12
 
 - Re-renders finds each view from the outside in: inside the view of the nearest component around it that was

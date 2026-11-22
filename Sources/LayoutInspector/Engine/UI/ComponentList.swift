@@ -25,14 +25,68 @@ struct ComponentList {
 
     let all: [Item]
     let folded: [Item]
+    /// Where each host of the capture can show anything, in `space`: see ``visibleRegions(of:in:)``.
+    let regions: [ObjectIdentifier: CGRect]
 
-    init(_ capture: InspectorCapture?, modifierTypes: Set<String> = []) {
+    /// `space`: the view the node frames are in; without it, Visible checks only the frames.
+    init(_ capture: InspectorCapture?, modifierTypes: Set<String> = [], space: UIView? = nil) {
         let tree = Tree(capture)
         func isModifier(_ node: InspectorNode) -> Bool {
-            node.kind == .customModifier || modifierTypes.contains(node.typeName)
+            node.kind == .customModifier || modifierTypes.contains(node.typeName) || capture?.modifierTypes.contains(node.typeName) == true
+                || Self.isModifierName(node.title)
         }
         all = Self.unfolded(tree)
         folded = Self.folded(tree, isModifier: isModifier)
+        regions = space.map { Self.visibleRegions(of: capture?.swiftUIRoots.compactMap(\.anchor.view) ?? [], in: $0) } ?? [:]
+    }
+
+    /// The part of each host that is on screen: its frame cut by every view around it that clips (a scroll view, a
+    /// container of tabs or pages), `.null` when nothing is left. A host at the same place as a later host of the
+    /// same class shows nothing of its own: a tab bar draws its items twice, the selected look over the plain one.
+    static func visibleRegions(of hosts: [UIView], in space: UIView) -> [ObjectIdentifier: CGRect] {
+        var result: [ObjectIdentifier: CGRect] = [:]
+        var frames: [(host: UIView, frame: CGRect)] = []
+        for host in hosts where result[ObjectIdentifier(host)] == nil {
+            var region = host.convert(host.bounds, to: space)
+            var next = host.superview
+            while let view = next, region.width > 0, region.height > 0 {
+                if view.clipsToBounds || view is UIWindow { region = region.intersection(view.convert(view.bounds, to: space)) }
+                next = view.superview
+            }
+            result[ObjectIdentifier(host)] = region.isNull || region.width < 0.5 || region.height < 0.5 ? .null : region
+            frames.append((host, host.convert(host.bounds, to: space)))
+        }
+        // Only small hosts side by side in one container (items of a bar): a full-screen overlay host of the same class
+        // over a screen hides nothing of it.
+        let screen = space.bounds.area
+        for entry in frames where entry.frame.area > 0 && entry.frame.area < screen / 4 {
+            let covered = frames.contains { other in
+                other.host !== entry.host && type(of: other.host) == type(of: entry.host) && other.frame.isClose(to: entry.frame)
+                    && !other.host.isHidden && other.host.alpha > 0.01 && isBelow(entry.host, other.host, within: 4)
+            }
+            if covered { result[ObjectIdentifier(entry.host)] = .null }
+        }
+        return result
+    }
+
+    /// `view` is drawn before `other`: where their branches meet, at most `levels` up from `view`, `view`'s comes first.
+    private static func isBelow(_ view: UIView, _ other: UIView, within levels: Int) -> Bool {
+        var chain: [UIView] = []
+        var next: UIView? = other
+        while let current = next { chain.append(current); next = current.superview }
+        var child = view
+        var parent = view.superview
+        var level = 0
+        while let p = parent, level < levels {
+            level += 1
+            if let index = chain.firstIndex(where: { $0 === p }), index > 0,
+               let a = p.subviews.firstIndex(where: { $0 === child }), let b = p.subviews.firstIndex(where: { $0 === chain[index - 1] }) {
+                return a < b
+            }
+            child = p
+            parent = p.superview
+        }
+        return false
     }
 
     /// Components and the components nearest below each, in screen order.
@@ -115,6 +169,11 @@ struct ComponentList {
             add(root, parent: nil, absorbing: mine)
         }
         return items
+    }
+
+    /// Named as a `ViewModifier`: also folded as one, for the modifiers neither the graph nor the capture's trees tell.
+    static func isModifierName(_ title: String) -> Bool {
+        title.hasSuffix("Modifier")
     }
 
     static func isPresenter(_ node: InspectorNode) -> Bool {
@@ -203,7 +262,7 @@ struct ComponentList {
         var rows = items(folded: filter.hidesWrappers).filter { item in
             let node = item.node
             if let point = context.point, !item.frame.contains(point) { return false }
-            if filter.visibleOnly, !Self.isVisible(item.target, in: context.bounds) { return false }
+            if filter.visibleOnly, !Self.isVisible(item.target, in: context.bounds) || !isInRegion(item.target) { return false }
             if filter.appTypesOnly, !TypeNames.isAppType(node.typeName) { return false }
             // A row stands for its folded wrappers too.
             let members = [node] + item.wrappers
@@ -238,17 +297,18 @@ struct ComponentList {
     }
 
     /// Counts of the modifiers folded into a row, by their names: an `Animatable` modifier (a shimmer) runs its `body`
-    /// on every frame of its animation, while the view it is applied to doesn't.
+    /// on every frame of its animation, while the view it is applied to doesn't. A count shared with other views shows
+    /// as one (`Σ14/2`): the modifier isn't a row of its own.
     static func wrapperRenders(of item: Item, counts: RenderCounts?) -> [(title: String, entry: RenderCounts.Entry)] {
         guard let counts else { return [] }
         return item.wrappers.compactMap { wrapper in
-            counts.byNode[wrapper.id].flatMap { $0.count > 0 && $0.instances == 1 ? (wrapper.title, $0) : nil }
+            counts.byNode[wrapper.id].flatMap { $0.count > 0 ? (wrapper.title, $0) : nil }
         }
     }
 
     /// The highest count of a row: its own or one of its folded modifiers'.
     static func hottest(_ item: Item, _ counts: RenderCounts?) -> Int {
-        ([counts?.byNode[item.node.id]?.count ?? 0] + wrapperRenders(of: item, counts: counts).map(\.entry.count)).max() ?? 0
+        ([counts?.byNode[item.node.id]?.count ?? 0] + wrapperRenders(of: item, counts: counts).filter { $0.entry.instances == 1 }.map(\.entry.count)).max() ?? 0
     }
 
     /// A row of the list: one component, or a run of siblings of one type ("Row ×14") that opens with a tap.
@@ -323,6 +383,13 @@ struct ComponentList {
             result.append(.item(row))
         }
         return result
+    }
+
+    /// Lies in the part of its host that is on screen (always, when the regions aren't known).
+    private func isInRegion(_ node: InspectorNode) -> Bool {
+        guard let host = node.path.first?.anchor.view, let region = regions[ObjectIdentifier(host)] else { return true }
+        let shown = node.frame.intersection(region)
+        return !shown.isNull && shown.width >= 0.5 && shown.height >= 0.5
     }
 
     /// Has a size, is on screen and isn't hidden by a presentation above it.

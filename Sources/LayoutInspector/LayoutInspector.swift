@@ -22,7 +22,7 @@ import os
 /// and the data comes from the SwiftUI runtime. Everything happens on the main thread.
 public enum LayoutInspector {
     /// Version of the library, as tagged. Written into the report files, so tools can tell what they read.
-    public static let version = "0.2.12"
+    public static let version = "0.2.13"
 
     /// Turns the inspector on for this process. Call it once, before the first SwiftUI view of the app is
     /// created – not just before the inspected one: `App.init`, or

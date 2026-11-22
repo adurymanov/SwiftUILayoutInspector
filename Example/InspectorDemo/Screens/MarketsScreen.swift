@@ -201,7 +201,8 @@ struct InstrumentIcon: View {
     }
 }
 
-/// Changes the background while pressed, and calls `action` on release.
+/// Changes the background while pressed, and calls `action` on release. Draws its content twice, the tinted copy
+/// over the plain one (shown only while pressed): the views inside are in the graph twice, at one place.
 struct PressColor: ViewModifier {
     let normal: Color
     let pressed: Color
@@ -211,7 +212,33 @@ struct PressColor: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(isPressed ? pressed : normal)
+            .overlay { content.background(pressed).opacity(isPressed ? 1 : 0) }
             .gesture(DragGesture(minimumDistance: 0).updating($isPressed) { _, state, _ in state = true }.onEnded { _ in action() })
+    }
+}
+
+/// A row of the cards its caller declares: the cards sit in the graph under the caller, beside the grid.
+struct InstrumentGrid<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(spacing: 8) { content }
+    }
+}
+
+/// A titled section of cards. Several of them on one screen: the same card type in more than one grid.
+struct CardsSection: View {
+    let title: String
+    let symbols: [String]
+    let model: MarketsModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            AmountText(title).font(.title3.bold())
+            InstrumentGrid {
+                ForEach(symbols, id: \.self) { InstrumentCard(symbol: $0, quote: model.quotes[$0]!) }
+            }
+        }
     }
 }
 
@@ -293,22 +320,20 @@ struct MarketsScreen: View {
     }
 
     static let symbols = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOG", "META", "TSLA", "NFLX", "AMD", "INTC", "ORCL", "ADBE"]
-    private let grid = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 PortfolioSummary(model: model)
                 if showsShimmer { NewProductsButton() }
-                AmountText("Popular").font(.title3.bold())
-                LazyVGrid(columns: grid, spacing: 8) {
-                    ForEach(Self.symbols.prefix(6), id: \.self) { InstrumentCard(symbol: $0, quote: model.quotes[$0]!) }
-                }
+                CardsSection(title: "Popular", symbols: Array(Self.symbols[0..<3]), model: model)
                 AmountText("Watchlist").font(.title3.bold())
                 VStack(spacing: 0) {
                     ForEach(Self.symbols, id: \.self) { InstrumentRow(symbol: $0, name: "\($0) Inc.", quote: model.quotes[$0]!) }
                 }
                 .padding(.horizontal, -20)
+                CardsSection(title: "Most traded", symbols: Array(Self.symbols[3..<6]), model: model)
+                CardsSection(title: "Gainers", symbols: Array(Self.symbols[6..<9]), model: model)
             }
             .padding(20)
         }

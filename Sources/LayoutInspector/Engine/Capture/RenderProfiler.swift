@@ -55,9 +55,11 @@ struct RenderCounts: Equatable {
         }
     }
 
-    func sharedGroups(in capture: InspectorCapture) -> [SharedGroup] {
+    /// `among`: only the groups with one of these components (the rows a list shows); all when `nil`.
+    func sharedGroups(in capture: InspectorCapture, among: Set<Int>? = nil) -> [SharedGroup] {
         var groups: [Int: SharedGroup] = [:]
-        for (id, entry) in byNode where entry.instances > 1 {
+        let shown = among.map { among in Set(byNode.compactMap { among.contains($0.key) && $0.value.instances > 1 ? $0.value.group : nil }) }
+        for (id, entry) in byNode where entry.instances > 1 && shown?.contains(entry.group) != false {
             guard let node = capture.node(withID: id) else { continue }
             groups[entry.group, default: SharedGroup(title: node.title, count: entry.count, components: 0, graphViews: entry.instances)].components += 1
         }
@@ -169,13 +171,39 @@ final class RenderProfiler {
 
     /// Classifies the nodes of a new capture that weren't classified for the same view before (one full description),
     /// so that reading them stays short. `owners`: node → the value node of the view that owns it.
-    func prepare(_ owners: [UInt32: UInt32]) {
+    /// `known`: nodes already classified when they were read (``ComponentGraph/Forest/isBody``).
+    func prepare(_ owners: [UInt32: UInt32], known: [UInt32: Bool] = [:]) {
         kinds = kinds.filter { node, kind in kind != .absent && owners[node] == self.owners[node] && owners[node] != nil }
         self.owners = owners
-        let unknown = Set(owners.keys.filter { kinds[$0] == nil })
+        var unknown = Set<UInt32>()
+        for node in owners.keys where kinds[node] == nil {
+            if let body = known[node] { kinds[node] = body ? .body(label: nil) : .other } else { unknown.insert(node) }
+        }
         let graphs = liveGraphs()
         guard !unknown.isEmpty, !graphs.isEmpty else { return }
         Self.classify(unknown, in: graphs, into: &kinds)
+    }
+
+    /// Whether each rule type computes a view's `body`, by its metadata.
+    private static var bodyRules: [UnsafeRawPointer: Bool] = [:]
+
+    /// Whether a node computes a view's `body`, from the type of its rule (`AGGraphGetAttributeInfo`): a lookup per
+    /// node, where the full description lists the whole graph. `nil` when AttributeGraph can't tell. Only for a node
+    /// just read from a live tree.
+    static func isBody(_ node: UInt32) -> Bool? {
+        var rule: UnsafeRawPointer?, value: UnsafeRawPointer?
+        guard LIAGGraphGetAttributeTypes(node, &rule, &value), let rule else { return nil }
+        if let known = bodyRules[rule] { return known }
+        // The name as the full description gives it (`AGTypeDescription`), so both ways test the same text.
+        let type = unsafeBitCast(rule, to: Any.Type.self)
+        let name = ViewDebugReader.readableName(of: type) ?? _typeName(type, qualified: false)
+        let isBody = isBodyRule(name)
+        bodyRules[rule] = isBody
+        return isBody
+    }
+
+    static func isBodyRule(_ name: String) -> Bool {
+        name.contains("Body<ViewBodyAccessor<") || name.contains("Body<ModifierBodyAccessor<")
     }
 
     func bodyCounts(of nodes: Set<UInt32>) -> [UInt32: Int] {
@@ -265,7 +293,7 @@ final class RenderProfiler {
                               let type = (entry.object(forKey: "type") as? NSNumber)?.intValue else { continue }
                         let body = isBody[type] ?? {
                             let name = type < types.count ? ((types[type] as? NSDictionary)?.object(forKey: "name") as? String) ?? "" : ""
-                            let value = name.contains("Body<ViewBodyAccessor<") || name.contains("Body<ModifierBodyAccessor<")
+                            let value = isBodyRule(name)
                             isBody[type] = value
                             return value
                         }()
@@ -303,12 +331,51 @@ final class RenderHeatmap {
     /// Timings of the last `map` and `read`, for the log.
     private(set) var lastMapDuration: TimeInterval = 0
     private(set) var lastReadDuration: TimeInterval = 0
+    /// The parts of the last mapping: reading the graph's views, matching, classifying the nodes; and its longest step.
+    private(set) var lastMapParts: (forest: TimeInterval, match: TimeInterval, classify: TimeInterval, longestStep: TimeInterval) = (0, 0, 0, 0)
 
+    private var pending: (capture: InspectorCapture, forest: ComponentGraph.ForestBuilder?, matches: [Int: ComponentGraph.Match]?)?
+    private var parts: (forest: TimeInterval, match: TimeInterval, classify: TimeInterval, longestStep: TimeInterval) = (0, 0, 0, 0)
+
+    /// A mapping started by ``beginMap(_:)`` isn't done yet.
+    var isMapping: Bool { pending != nil }
+
+    /// Maps `capture` at once.
     func map(_ capture: InspectorCapture) {
-        guard mappedCapture !== capture else { return }
+        beginMap(capture)
+        while !mapStep() {}
+    }
+
+    /// Starts mapping `capture` in steps (``mapStep()``), one per frame: each host's views, the matching, the
+    /// classification. Until it is done, reads use the previous mapping.
+    func beginMap(_ capture: InspectorCapture) {
+        guard mappedCapture !== capture, pending?.capture !== capture else { return }
+        let cached = ComponentGraph.cachedForest(of: capture) != nil
+        pending = (capture, cached ? nil : ComponentGraph.ForestBuilder(capture), nil)
+        parts = (0, 0, 0, 0)
+    }
+
+    /// One step of the mapping in progress. `true` when there is none left.
+    @discardableResult
+    func mapStep() -> Bool {
+        guard let job = pending else { return true }
         let start = CACurrentMediaTime()
-        mappedCapture = capture
-        let matches = ComponentGraph.match(capture)
+        defer {
+            let spent = CACurrentMediaTime() - start
+            parts.longestStep = max(parts.longestStep, spent)
+        }
+        if let forest = job.forest {
+            let done = forest.step()
+            parts.forest += CACurrentMediaTime() - start
+            if done { pending?.forest = nil }
+            return false
+        }
+        guard let matches = job.matches else {
+            pending?.matches = ComponentGraph.match(job.capture)
+            parts.match += CACurrentMediaTime() - start
+            return false
+        }
+        mappedCapture = job.capture
         slots = matches.map { id, match in
             let nodes = match.views.flatMap(\.nodes)
             return (id, nodes, match.views.count, nodes.sorted().hashValue)
@@ -316,8 +383,13 @@ final class RenderHeatmap {
         wanted = Set(slots.flatMap(\.nodes))
         var owners: [UInt32: UInt32] = [:]
         for match in matches.values { for view in match.views { for node in view.nodes { owners[node] = view.valueNode } } }
-        profiler.prepare(owners)
-        lastMapDuration = CACurrentMediaTime() - start
+        profiler.prepare(owners, known: ComponentGraph.cachedForest(of: job.capture)?.isBody ?? [:])
+        parts.classify += CACurrentMediaTime() - start
+        parts.longestStep = max(parts.longestStep, CACurrentMediaTime() - start)
+        lastMapParts = parts
+        lastMapDuration = parts.forest + parts.match + parts.classify
+        pending = nil
+        return true
     }
 
     func read() -> RenderCounts {
@@ -335,9 +407,15 @@ final class RenderHeatmap {
         return result
     }
 
+    /// Drops the mapping in progress (the screen changed under it); reads keep the previous one.
+    func cancelMap() {
+        pending = nil
+    }
+
     /// Forget the mapping: the next `map` reads the views again.
     func invalidate() {
         mappedCapture = nil
+        pending = nil
         slots = []
         wanted = []
     }

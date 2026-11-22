@@ -422,8 +422,38 @@ final class InspectorSession: ObservableObject {
             selectedID = match?.id
         }
         overlay.capture = capture
-        if heatmap != nil { readRenderCounts() }
-        AgentReports.didFinish(capture, session: self, afterCommand: jobCommand)
+        if let heatmap {
+            // The report waits for the counts of this capture: the mapping takes a few frames.
+            heatmap.beginMap(capture)
+            mapGuard = mappingGuard(target)
+            pendingReport = (capture, jobCommand)
+            readRenderCounts()
+        } else {
+            AgentReports.didFinish(capture, session: self, afterCommand: jobCommand)
+        }
+    }
+
+    private var pendingReport: (capture: InspectorCapture, command: Int)?
+    private var mapGuard: [Int] = []
+
+    /// What must stay the same while a mapping runs: the scroll positions and the hosts.
+    private func mappingGuard(_ target: UIView) -> [Int] {
+        [LayoutCapture.scrollSignature(of: target)] + LayoutCapture.visibleHostingViews(in: target, excluding: excluded).map { ObjectIdentifier($0).hashValue }
+    }
+
+    private func reportPending() {
+        guard let (capture, command) = pendingReport else { return }
+        pendingReport = nil
+        if capture === self.capture { AgentReports.didFinish(capture, session: self, afterCommand: command) }
+    }
+
+    /// Timings of the last mapping of components to graph views, for `capture.json`.
+    var renderMapTimings: [String: Double]? {
+        guard let heatmap, heatmap.lastMapDuration > 0 else { return nil }
+        let parts = heatmap.lastMapParts
+        func ms(_ t: TimeInterval) -> Double { (t * 10000).rounded() / 10 }
+        return ["total": ms(heatmap.lastMapDuration), "forest": ms(parts.forest), "match": ms(parts.match),
+                "classify": ms(parts.classify), "longestStep": ms(parts.longestStep), "read": ms(heatmap.lastReadDuration)]
     }
 
     var selectedNode: InspectorNode? { selectedID.flatMap { capture?.node(withID: $0) } }
@@ -464,6 +494,7 @@ final class InspectorSession: ObservableObject {
             self.heatmap = nil
             renderCounts = nil
             syncOptions()
+            reportPending()
         }
     }
 
@@ -481,10 +512,12 @@ final class InspectorSession: ObservableObject {
         lastCountRead = CACurrentMediaTime()
         if let target { heatmap.profiler.add(hosts: LayoutCapture.visibleHostingViews(in: target, excluding: excluded)) }
         guard let capture else { return }
-        heatmap.map(capture)
+        heatmap.beginMap(capture)
         let counts = heatmap.read()
         if Self.logs {
-            NSLog("%@", "LayoutInspector re-renders: map \(Int(heatmap.lastMapDuration * 1000)) ms, "
+            let parts = heatmap.lastMapParts
+            NSLog("%@", "LayoutInspector re-renders: map \(Int(heatmap.lastMapDuration * 1000)) ms (forest \(Int(parts.forest * 1000)), "
+                  + "match \(Int(parts.match * 1000)), classify \(Int(parts.classify * 1000)), longest step \(Int(parts.longestStep * 1000))), "
                   + "read \(Int(heatmap.lastReadDuration * 1000)) ms, \(counts.byNode.count) views")
         }
         guard counts != renderCounts else { return }
@@ -528,6 +561,19 @@ final class InspectorSession: ObservableObject {
         }
         if job != nil {
             scheduleCaptureSteps()
+            return
+        }
+        // Mapping a new capture's components to the graph, a step a frame. The steps read values of views found in
+        // earlier frames: when content scrolled or hosts came or went since (what tears subgraphs down), the mapping
+        // is dropped and the next capture maps.
+        if let heatmap, heatmap.isMapping {
+            if mapGuard != mappingGuard(target) {
+                heatmap.cancelMap()
+                reportPending()
+            } else if heatmap.mapStep() {
+                readRenderCounts()
+                reportPending()
+            }
             return
         }
         // Once a second, at most 5 % of the time: without the short description a read covers the whole graph.

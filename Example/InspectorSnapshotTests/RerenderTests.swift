@@ -223,7 +223,10 @@ final class RerenderTests: XCTestCase {
         XCTAssertEqual(lines.first, "hottest: WalletBalance 5")
         XCTAssertEqual(lines.filter { $0.contains("QuoteRow") }, ["QuoteRow: Σ6 shared by 3 views (3 in the graph)"])
         XCTAssertTrue(lines.contains("3 of 4 views share a count with views they can't be told from:"), "\(lines)")
-        XCTAssertEqual(ComponentListView.sharedCounts(counts, capture: capture), ["QuoteRow: Σ6 shared by 3 views (3 in the graph)"])
+        // Above the components list: only for the rows it shows.
+        let listed = ComponentList(capture).rows(ComponentList.Filter(), ComponentList.Context(bounds: harness.window.bounds))
+        XCTAssertEqual(ComponentListView.sharedCounts(counts, capture: capture, rows: listed), ["QuoteRow: Σ6 shared by 3 views (3 in the graph)"])
+        XCTAssertEqual(ComponentListView.sharedCounts(counts, capture: capture, rows: listed.filter { $0.node.title != "QuoteRow" }), [])
     }
 
     /// A sheet counted while it is on screen goes away: nothing keeps its graph, and profiling ends with its inspector.

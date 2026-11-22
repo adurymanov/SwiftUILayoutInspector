@@ -50,6 +50,7 @@ enum CaptureJSON {
                                      ["title": group.title, "count": group.count, "components": group.components, "graphViews": group.graphViews]
                                  }] as [String: Any]
         }
+        object["components"] = componentList(capture, bounds: bounds, space: space, counts: renderCounts)
         if let host = capture.swiftUIRoots.first {
             object["environment"] = Dictionary(ComponentDetails.environment(of: host).map { ($0.name, $0.value) }) { a, _ in a }
         }
@@ -58,6 +59,35 @@ enum CaptureJSON {
                                "scale": space.window?.screen.scale ?? UIScreen.main.scale] as [String: Any]
         }
         return object
+    }
+
+    /// The components list as it opens with the default filters (Visible, Hide wrappers, App types): one entry per
+    /// row, a folded group of siblings as one entry with `count`.
+    static func componentList(_ capture: InspectorCapture, bounds: CGRect, space: UIView?, counts: RenderCounts?) -> [String: Any] {
+        let list = ComponentList(capture, modifierTypes: ComponentGraph.modifierTypes(in: capture, readingGraph: false), space: space)
+        let filter = ComponentList.Filter()
+        let context = ComponentList.Context(bounds: bounds, counts: counts)
+        let rows = list.rows(filter, context)
+        let items = list.items(folded: filter.hidesWrappers)
+        func row(_ item: ComponentList.Item) -> [String: Any] {
+            var o: [String: Any] = ["node": item.node.id, "title": item.node.title, "frame": item.frame.isNull ? NSNull() : rect(item.frame),
+                                    "wrappers": item.wrappers.count]
+            if let parent = item.parent { o["parent"] = items[parent].node.title }
+            if let entry = counts?.byNode[item.node.id] { o["renders"] = ["count": entry.count, "views": entry.instances] }
+            let modifiers = ComponentList.wrapperRenders(of: item, counts: counts)
+            if !modifiers.isEmpty { o["modifierRenders"] = modifiers.map { ["title": $0.title, "count": $0.entry.count, "views": $0.entry.instances] } }
+            return o
+        }
+        let entries: [[String: Any]] = list.entries(rows, filter: filter, context: context, expanded: []).compactMap { entry in
+            switch entry {
+            case let .item(item): row(item)
+            case let .group(_, group): row(group[0]).merging(["count": group.count]) { a, _ in a }
+            case .close: nil
+            }
+        }
+        var result: [String: Any] = ["rows": rows.count, "entries": entries]
+        if let counts { result["shared"] = counts.sharedGroups(in: capture, among: Set(rows.map(\.node.id))).map(\.line) }
+        return result
     }
 
     private static func describe(_ node: InspectorNode, tree: String, component: String?) -> [String: Any] {

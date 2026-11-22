@@ -48,7 +48,7 @@ enum AgentReports {
         var json = CaptureJSON.object(for: capture, rules: session.configuration.lintRules, bounds: bounds, space: session.overlay.space,
                                      renderCounts: session.renderCounts)
         let mainMs = (CACurrentMediaTime() - start) * 1000
-        let info: [String: Any] = [
+        var info: [String: Any] = [
             "number": captureCount,
             "afterCommand": afterCommand,
             "date": capture.date.timeIntervalSince1970,
@@ -59,6 +59,7 @@ enum AgentReports {
             "timings": LayoutCapture.lastTimings,
             "writeMainThreadMs": (mainMs * 10).rounded() / 10,
         ]
+        if let map = session.renderMapTimings { info["rendersMap"] = map }
         json["capture"] = info
         lastCapture = info
         let status = statusObject()

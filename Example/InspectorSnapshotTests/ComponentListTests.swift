@@ -172,7 +172,7 @@ final class ComponentListTests: XCTestCase {
         }
         // A row is folded into its innermost component of the same size: InstrumentRow › PriceChangeStream › StreamValue.
         XCTAssertGreaterThanOrEqual(group("StreamValue")?.count ?? 0, 3, describe)
-        XCTAssertEqual(group("InstrumentCard")?.count, 6, describe)
+        XCTAssertEqual(group("InstrumentCard")?.count, 3, describe)
         XCTAssertGreaterThanOrEqual(group("TabItemLabel")?.count ?? 0, 4, describe)
         // Folded: nothing inside a card or a row is listed.
         XCTAssertFalse(entries.contains { if case let .item(item) = $0 { ["PriceDelta", "InstrumentIcon"].contains(item.node.title) } else { false } }, describe)

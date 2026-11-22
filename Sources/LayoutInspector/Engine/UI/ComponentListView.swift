@@ -28,13 +28,15 @@ final class ComponentListModel: ObservableObject {
     init() { filter = Self.load() }
 
     /// Called when the session publishes a capture, never from a view's body: building reads the graph.
-    func update(_ capture: InspectorCapture?) {
+    func update(_ capture: InspectorCapture?, space: UIView? = nil) {
         guard capture !== self.capture || capture == nil else { return }
         let start = CACurrentMediaTime()
         self.capture = capture
         stateful = nil
         if point != nil { point = nil }
-        list = ComponentList(capture, modifierTypes: capture.map(ComponentGraph.modifierTypes(in:)) ?? [])
+        // The capture knows the modifiers of its own trees; the graph isn't read here (Re-renders may be reading it a
+        // host a frame).
+        list = ComponentList(capture, modifierTypes: capture.map { ComponentGraph.modifierTypes(in: $0, readingGraph: false) } ?? [], space: space)
         if let module = filter.module, !list.modules.contains(module) { filter.module = nil }
         if filter.statefulOnly { readStateful() }
         buildDuration = CACurrentMediaTime() - start
@@ -118,7 +120,7 @@ struct ComponentListView: View {
                     }
                 } header: {
                     FilterBar(model: model, modules: model.list.modules, hasCounts: counts != nil, rowCount: rows.count,
-                              shared: Self.sharedCounts(counts, capture: session.capture))
+                              shared: Self.sharedCounts(counts, capture: session.capture, rows: rows))
                 }
             }
             .listStyle(.plain)
@@ -137,7 +139,7 @@ struct ComponentListView: View {
             .navigationTitle("Components")
             .navigationBarTitleDisplayMode(.inline)
             // Never inside this view's update: building the list reads the graph.
-            .onReceive(session.$capture) { capture in DispatchQueue.main.async { model.update(capture) } }
+            .onReceive(session.$capture) { capture in DispatchQueue.main.async { model.update(capture, space: session.overlay.space) } }
             .toolbar {
                 ToolbarItemGroup(placement: .topBarLeading) {
                     Button { startPicking() } label: { Image(systemName: "scope") }
@@ -161,9 +163,10 @@ struct ComponentListView: View {
     }
 
     /// Views that share one count, once per group, as the panel shows them: "BrandLabel: Σ12 shared by 2 views (74 in the graph)".
-    static func sharedCounts(_ counts: RenderCounts?, capture: InspectorCapture?) -> [String] {
+    /// Only for the rows shown: a folded modifier's count is on the row of the view it is applied to.
+    static func sharedCounts(_ counts: RenderCounts?, capture: InspectorCapture?, rows: [ComponentList.Item]) -> [String] {
         guard let counts, let capture else { return [] }
-        return counts.sharedGroups(in: capture).map(\.line)
+        return counts.sharedGroups(in: capture, among: Set(rows.map(\.node.id))).map(\.line)
     }
 
     private func startPicking() {
@@ -322,7 +325,8 @@ private struct ComponentRowView: View {
                                 .fixedSize()
                                 .accessibilityLabel("\(renders.label) renders")
                         }
-                        ForEach(modifierRenders, id: \.title) { modifier in
+                        ForEach(modifierRenders.indices, id: \.self) { index in
+                            let modifier = modifierRenders[index]
                             Text("\(modifier.title) \(modifier.entry.label)")
                                 .font(.caption2.monospacedDigit().weight(.semibold))
                                 .lineLimit(1)

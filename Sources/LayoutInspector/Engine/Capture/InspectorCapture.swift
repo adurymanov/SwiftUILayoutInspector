@@ -19,6 +19,8 @@ public final class InspectorCapture {
     private(set) var issues: [LintIssue] = []
     /// What the presentations on screen hide (see `Occlusion`); `nil` when nothing opaque is presented.
     var occlusion: Occlusion?
+    /// The app's `ViewModifier` types in the trees the capture was built from, by full type name.
+    var modifierTypes = Set<String>()
 
     init(swiftUIRoots: [InspectorNode], uikitRoot: InspectorNode, isSwiftUIGraphAvailable: Bool, duration: TimeInterval) {
         self.swiftUIRoots = swiftUIRoots
@@ -356,6 +358,7 @@ enum LayoutCapture {
             let capture = InspectorCapture(swiftUIRoots: roots, uikitRoot: uikit, isSwiftUIGraphAvailable: graphAvailable,
                                            duration: duration)
             capture.occlusion = Occlusion(root: root)
+            capture.modifierTypes = (reconstruction ?? lastReconstruction?.index)?.modifierTypes ?? []
             output.capture = capture
             lastTimings = ["total \(Int(duration * 1000)) ms"]
                 + timings.sorted { $0.value > $1.value }.map { "\($0.key) \(Int($0.value * 1000)) ms" }
